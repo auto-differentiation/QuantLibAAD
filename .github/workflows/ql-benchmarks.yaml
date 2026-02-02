@@ -220,8 +220,7 @@ jobs:
             -DQL_BUILD_EXAMPLES=OFF \
             -DQL_BUILD_BENCHMARK=OFF \
             -DQLRISKS_DISABLE_AAD=OFF \
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON \
-            -DQLRISKS_BUILD_BENCHMARK_OVERHEAD=ON
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
 
       - name: Build XAD benchmark (JIT off)
         run: |
@@ -233,21 +232,6 @@ jobs:
           echo "===== XAD BENCHMARK (XAD + XAD-Split, JIT disabled) ====="
           cd QuantLib/build-xad
           ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all --xad-only 2>&1 | tee xad_results.txt
-
-      # =========================================================================
-      # Benchmark 4: Type overhead (double vs AReal, pricing only)
-      # Reuses the XAD build - same binary tests both types
-      # =========================================================================
-      - name: Build type overhead benchmark
-        run: |
-          cd QuantLib/build-xad
-          cmake --build . --target benchmark_overhead
-
-      - name: Run Type Overhead Benchmark
-        run: |
-          echo "===== TYPE OVERHEAD (double vs AReal, pricing only) ====="
-          cd QuantLib/build-xad
-          ./QuantLib-Risks-Cpp/test-suite/benchmark-overhead --all 2>&1 | tee overhead_results.txt
 
       # =========================================================================
       # Combine and display results
@@ -523,7 +507,6 @@ jobs:
           path: |
             QuantLib/build-double/fd_results.txt
             QuantLib/build-xad/xad_results.txt
-            QuantLib/build-xad/overhead_results.txt
             QuantLib/build-forge/forge_results.txt
 
   ##############################################################################
@@ -703,8 +686,7 @@ jobs:
             -DQL_BUILD_EXAMPLES=OFF ^
             -DQL_BUILD_BENCHMARK=OFF ^
             -DQLRISKS_DISABLE_AAD=OFF ^
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON ^
-            -DQLRISKS_BUILD_BENCHMARK_OVERHEAD=ON
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
 
       - name: Build XAD benchmark (JIT off)
         shell: cmd
@@ -720,25 +702,6 @@ jobs:
           cd QuantLib\build-xad
           QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all --xad-only > xad_results.txt 2>&1
           type xad_results.txt
-
-      # =========================================================================
-      # Benchmark 4: Type overhead (double vs AReal, pricing only)
-      # Reuses the XAD build - same binary tests both types
-      # =========================================================================
-      - name: Build type overhead benchmark
-        shell: cmd
-        run: |
-          call "%VSVARSALL%" x64
-          cd QuantLib\build-xad
-          cmake --build . --target benchmark_overhead
-
-      - name: Run Type Overhead Benchmark
-        shell: cmd
-        run: |
-          echo ===== TYPE OVERHEAD (double vs AReal, pricing only) =====
-          cd QuantLib\build-xad
-          QuantLib-Risks-Cpp\test-suite\benchmark-overhead.exe --all > overhead_results.txt 2>&1
-          type overhead_results.txt
 
       # =========================================================================
       # Combine and display results
@@ -956,5 +919,4 @@ jobs:
           path: |
             QuantLib/build-double/fd_results.txt
             QuantLib/build-xad/xad_results.txt
-            QuantLib/build-xad/overhead_results.txt
             QuantLib/build-forge/forge_results.txt
