@@ -113,29 +113,3 @@ if(QLRISKS_BUILD_BENCHMARK_AAD)
         install(TARGETS benchmark_aad RUNTIME DESTINATION ${QL_INSTALL_BINDIR})
     endif()
 endif()
-
-# AAD + FD combined benchmark for local script use
-# Same as benchmark_aad but includes FD (bump-and-revalue) using QuantLib::Real
-option(QLRISKS_BUILD_BENCHMARK_AAD_LOCAL "Build combined AAD+FD benchmark for local use" OFF)
-if(QLRISKS_BUILD_BENCHMARK_AAD_LOCAL)
-    message(STATUS "QLRisks: Building AAD+FD local benchmark")
-    add_executable(benchmark_aad_local_script
-        benchmark_aad_local_script.cpp
-        benchmark_common.hpp
-        benchmark_pricing.hpp
-        PlatformInfo.hpp
-    )
-    set_target_properties(benchmark_aad_local_script PROPERTIES
-        OUTPUT_NAME "benchmark-aad-local")
-    target_link_libraries(benchmark_aad_local_script PRIVATE
-        ql_library
-        ${QL_THREAD_LIBRARIES})
-
-    if(TARGET QLRisks::forge)
-        message(STATUS "QLRisks AAD+FD local benchmark: Linking QLRisks::forge (JIT benchmarks enabled)")
-        target_link_libraries(benchmark_aad_local_script PRIVATE QLRisks::forge)
-        target_compile_definitions(benchmark_aad_local_script PRIVATE QLRISKS_HAS_FORGE=1)
-    else()
-        message(STATUS "QLRisks AAD+FD local benchmark: Building without Forge (XAD tape only)")
-    endif()
-endif()
