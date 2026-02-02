@@ -184,6 +184,182 @@ struct LMMSetup
 };
 
 // ============================================================================
+// Shared Payoff Recording - used by FD, JIT, and XAD-Split
+// ============================================================================
+
+// Variables holder for payoff computation (templated on AD type)
+template <typename ADType>
+struct PayoffVariables {
+    std::vector<ADType> initRates;
+    ADType swapRate;
+    std::vector<ADType> oisDiscounts;  // Empty for single-curve
+    std::vector<ADType> randoms;       // For JIT only; XAD-Split uses plain doubles
+};
+
+// Custom LMM evolve function using LOCAL arrays instead of process's mutable members.
+// This fixes XAD-Split tape recording issues caused by mutable state in process->evolve().
+// Implements the same predictor-corrector scheme as LiborForwardModelProcess::evolve().
+template <typename ADType, typename RandomsType>
+void evolveLMM(
+    std::vector<ADType>& asset,
+    const ext::shared_ptr<LiborForwardModelProcess>& process,
+    double t0,
+    double dt,
+    Size numFactors,
+    const RandomsType& randoms,
+    Size randomOffset)
+{
+    const Size size = asset.size();
+    const Size m = process->nextIndexReset(t0);
+    const ADType sdt = ADType(std::sqrt(dt));
+
+    // Get covariance parameters as plain doubles (these are constant, not AD-active).
+    // Extracting to double avoids type mismatches when ADType=double in XAD builds
+    // where Matrix elements are AReal<double>.
+    Matrix diffM = process->covarParam()->diffusion(t0, Array());
+    Matrix covM = process->covarParam()->covariance(t0, Array());
+    std::vector<std::vector<double>> diff(size, std::vector<double>(numFactors));
+    std::vector<std::vector<double>> covariance(size, std::vector<double>(size));
+    for (Size i = 0; i < size; ++i)
+    {
+        for (Size f = 0; f < numFactors; ++f)
+            diff[i][f] = extractValue(diffM[i][f]);
+        for (Size j = 0; j < size; ++j)
+            covariance[i][j] = extractValue(covM[i][j]);
+    }
+
+    // Get accrual periods (constants, not AD)
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+    std::vector<double> tau(size);
+    for (Size k = 0; k < size; ++k)
+    {
+        tau[k] = extractValue(accrualEnd[k]) - extractValue(accrualStart[k]);
+    }
+
+    // LOCAL arrays for predictor-corrector (no mutable state!)
+    std::vector<ADType> m1(size);
+    std::vector<ADType> m2(size);
+
+    // Build dw from randoms
+    std::vector<ADType> dw(numFactors);
+    for (Size f = 0; f < numFactors; ++f)
+        dw[f] = randoms[randomOffset + f];
+
+    for (Size k = m; k < size; ++k)
+    {
+        // Predictor step
+        const ADType y = tau[k] * asset[k];
+        m1[k] = y / (ADType(1.0) + y);
+
+        // Drift term using m1
+        ADType drift1 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
+
+        // Diffusion term
+        ADType r = ADType(0.0);
+        for (Size f = 0; f < numFactors; ++f)
+            r = r + diff[k][f] * dw[f];
+        r = r * sdt;
+
+        // Corrector step
+        const ADType x = y * exp(d + r);
+        m2[k] = x / (ADType(1.0) + x);
+
+        // Drift term using m2
+        ADType drift2 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift2 = drift2 + m2[j] * covariance[j][k];
+
+        // Final evolved rate
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
+    }
+}
+
+// Compute the MC path payoff (shared between FD, JIT, and XAD-Split)
+// RandomsType: std::vector<double> for FD/XAD-Split, std::vector<xad::AD> for JIT
+// UseCustomEvolve: true = use evolveLMM (for JIT graph recording, avoids mutable state)
+//                  false = use process->evolve() (for XAD-Split/tape, faster due to internal buffers)
+template <typename ADType, bool UseDualCurve, bool UseCustomEvolve = false, typename RandomsType>
+ADType computePathPayoff(
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    const ext::shared_ptr<LiborForwardModelProcess>& process,
+    PayoffVariables<ADType>& vars,
+    const RandomsType& randoms)
+{
+    std::vector<ADType> asset(config.size);
+    std::vector<ADType> assetAtExercise(config.size);
+    for (Size k = 0; k < config.size; ++k)
+        asset[k] = vars.initRates[k];
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Size offset = (step - 1) * setup.numFactors;
+
+        if constexpr (UseCustomEvolve)
+        {
+            // Custom evolveLMM with LOCAL arrays — needed for JIT graph recording
+            // (process->evolve() uses mutable members that break JIT's static graph)
+            double t0 = extractValue(setup.grid[step - 1]);
+            double dt = extractValue(setup.grid.dt(step - 1));
+            evolveLMM(asset, process, t0, dt, setup.numFactors, randoms, offset);
+        }
+        else
+        {
+            // Use process->evolve() directly — faster, uses pre-allocated internal buffers
+            Time t = setup.grid[step - 1];
+            Time dt = setup.grid.dt(step - 1);
+
+            Array dw(setup.numFactors);
+            for (Size f = 0; f < setup.numFactors; ++f)
+                dw[f] = randoms[offset + f];
+
+            // Convert vector<ADType> -> Array, evolve, convert back
+            Array assetArr(config.size);
+            for (Size k = 0; k < config.size; ++k)
+                assetArr[k] = asset[k];
+            assetArr = process->evolve(t, assetArr, dt, dw);
+            for (Size k = 0; k < config.size; ++k)
+                asset[k] = assetArr[k];
+        }
+
+        if (step == setup.exerciseStep)
+            for (Size k = 0; k < config.size; ++k)
+                assetAtExercise[k] = asset[k];
+    }
+
+    std::vector<ADType> dis(config.size);
+    if constexpr (UseDualCurve)
+    {
+        // Dual-curve: use OIS discount factors directly
+        for (Size k = 0; k < config.size; ++k)
+            dis[k] = vars.oisDiscounts[k];
+    }
+    else
+    {
+        // Single-curve: compute discount factors from forward rates
+        ADType df = ADType(1.0);
+        for (Size k = 0; k < config.size; ++k)
+        {
+            double accrual = setup.accrualEnd[k] - setup.accrualStart[k];
+            df = df / (ADType(1.0) + assetAtExercise[k] * accrual);
+            dis[k] = df;
+        }
+    }
+
+    ADType npv = ADType(0.0);
+    for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
+    {
+        double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
+        npv = npv + (vars.swapRate - assetAtExercise[m]) * accrual * dis[m];
+    }
+    return npv;
+}
+
+// ============================================================================
 // Templated Monte Carlo Pricing Function
 // ============================================================================
 
@@ -528,6 +704,245 @@ RealType priceSwaptionAuto(const BenchmarkConfig& config,
         return priceSwaption(config, setup, depositRates, swapRates, nrTrails);
     }
 }
+
+// ============================================================================
+// PricingSetup: Persistent QuantLib objects with SimpleQuote handles for FD
+// ============================================================================
+// Builds QuantLib curves and instruments ONCE, then supports efficient
+// bump-and-revalue by changing SimpleQuote values (triggers lazy re-bootstrap).
+
+template <bool UseDualCurve>
+struct PricingSetup
+{
+    const BenchmarkConfig& config;
+    const LMMSetup& setup;
+
+    // SimpleQuote handles for all market quotes
+    std::vector<ext::shared_ptr<SimpleQuote>> depoQuotes;
+    std::vector<ext::shared_ptr<SimpleQuote>> swapQuotes;
+    std::vector<ext::shared_ptr<SimpleQuote>> oisDepoQuotes;
+    std::vector<ext::shared_ptr<SimpleQuote>> oisSwapQuotes;
+
+    // Persistent curve objects (lazy re-bootstrap on quote change)
+    ext::shared_ptr<PiecewiseYieldCurve<ZeroYield, Linear>> forecastingCurve;
+    ext::shared_ptr<PiecewiseYieldCurve<ZeroYield, Linear>> discountingCurve;
+
+    // LMM process infrastructure (built once, reuses curves via handles)
+    RelinkableHandle<YieldTermStructure> termStructure;
+    ext::shared_ptr<IborIndex> index;
+    ext::shared_ptr<LiborForwardModelProcess> process;
+    ext::shared_ptr<VanillaSwap> fwdSwap;
+
+    // Cached intermediates for MC (refreshed after each bump)
+    std::vector<double> initRates;
+    double swapRateVal;
+    std::vector<double> oisDiscountFactors;
+
+    PricingSetup(const BenchmarkConfig& cfg, const LMMSetup& s)
+        : config(cfg), setup(s)
+    {
+        build();
+    }
+
+    void build()
+    {
+        // ================================================================
+        // Build FORECASTING curve with SimpleQuote handles
+        // ================================================================
+        RelinkableHandle<YieldTermStructure> euriborTS;
+        auto euribor6m = ext::make_shared<Euribor6M>(euriborTS);
+        euribor6m->addFixing(Date(2, September, 2005), 0.04);
+
+        std::vector<ext::shared_ptr<RateHelper>> forecastingInstruments;
+        depoQuotes.resize(config.numDeposits);
+        for (Size idx = 0; idx < config.numDeposits; ++idx)
+        {
+            depoQuotes[idx] = ext::make_shared<SimpleQuote>(config.depoRates[idx]);
+            forecastingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+                Handle<Quote>(depoQuotes[idx]), config.depoTenors[idx], setup.fixingDays,
+                setup.calendar, ModifiedFollowing, true, setup.dayCounter));
+        }
+        swapQuotes.resize(config.numSwaps);
+        for (Size idx = 0; idx < config.numSwaps; ++idx)
+        {
+            swapQuotes[idx] = ext::make_shared<SimpleQuote>(config.swapRates[idx]);
+            forecastingInstruments.push_back(ext::make_shared<SwapRateHelper>(
+                Handle<Quote>(swapQuotes[idx]), config.swapTenors[idx],
+                setup.calendar, Annual, Unadjusted, Thirty360(Thirty360::BondBasis),
+                euribor6m));
+        }
+
+        forecastingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+            setup.settlementDate, forecastingInstruments, setup.dayCounter);
+        forecastingCurve->enableExtrapolation();
+        euriborTS.linkTo(forecastingCurve);
+
+        // ================================================================
+        // Build DISCOUNTING curve (OIS) if dual-curve
+        // ================================================================
+        if constexpr (UseDualCurve)
+        {
+            RelinkableHandle<YieldTermStructure> oisTS;
+            auto eonia = ext::make_shared<Eonia>(oisTS);
+
+            std::vector<ext::shared_ptr<RateHelper>> discountingInstruments;
+            oisDepoQuotes.resize(config.numOisDeposits);
+            for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+            {
+                oisDepoQuotes[idx] = ext::make_shared<SimpleQuote>(config.oisDepoRates[idx]);
+                discountingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+                    Handle<Quote>(oisDepoQuotes[idx]), config.oisDepoTenors[idx], setup.fixingDays,
+                    setup.calendar, ModifiedFollowing, true, Actual360()));
+            }
+            oisSwapQuotes.resize(config.numOisSwaps);
+            for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+            {
+                oisSwapQuotes[idx] = ext::make_shared<SimpleQuote>(config.oisSwapRates[idx]);
+                discountingInstruments.push_back(ext::make_shared<OISRateHelper>(
+                    2, config.oisSwapTenors[idx], Handle<Quote>(oisSwapQuotes[idx]), eonia));
+            }
+
+            discountingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+                setup.settlementDate, discountingInstruments, setup.dayCounter);
+            discountingCurve->enableExtrapolation();
+            oisTS.linkTo(discountingCurve);
+        }
+
+        // ================================================================
+        // Build LMM process from 2-point ZeroCurve (derived from forecasting)
+        // ================================================================
+        index = ext::shared_ptr<IborIndex>(new Euribor6M(termStructure));
+        index->addFixing(Date(2, September, 2005), 0.04);
+
+        rebuildZeroCurve();
+
+        process = ext::shared_ptr<LiborForwardModelProcess>(
+            new LiborForwardModelProcess(config.size, index));
+        process->setCovarParam(ext::shared_ptr<LfmCovarianceParameterization>(
+            new LfmCovarianceProxy(
+                ext::make_shared<LmLinearExponentialVolatilityModel>(
+                    process->fixingTimes(), 0.291, 1.483, 0.116, 0.00001),
+                ext::make_shared<LmExponentialCorrelationModel>(config.size, 0.5))));
+
+        // ================================================================
+        // Build swap for fair rate computation
+        // ================================================================
+        fwdSwap = ext::shared_ptr<VanillaSwap>(
+            new VanillaSwap(Swap::Receiver, 1.0,
+                            setup.schedule, 0.05, setup.dayCounter,
+                            setup.schedule, index, 0.0, index->dayCounter()));
+        if constexpr (UseDualCurve)
+        {
+            fwdSwap->setPricingEngine(ext::make_shared<DiscountingSwapEngine>(
+                Handle<YieldTermStructure>(discountingCurve)));
+        }
+        else
+        {
+            fwdSwap->setPricingEngine(ext::make_shared<DiscountingSwapEngine>(
+                index->forwardingTermStructure()));
+        }
+
+        // ================================================================
+        // Extract intermediates
+        // ================================================================
+        refreshIntermediates();
+    }
+
+    // Rebuild the 2-point ZeroCurve from the PiecewiseYieldCurve and relink
+    void rebuildZeroCurve()
+    {
+        std::vector<Date> curveDates;
+        curveDates.push_back(setup.settlementDate);
+        Date endDate = setup.settlementDate + config.curveEndYears * Years;
+        curveDates.push_back(endDate);
+
+        std::vector<Rate> zeroRates;
+        zeroRates.push_back(extractValue(
+            forecastingCurve->zeroRate(setup.settlementDate, setup.dayCounter, Continuous).rate()));
+        zeroRates.push_back(extractValue(
+            forecastingCurve->zeroRate(endDate, setup.dayCounter, Continuous).rate()));
+
+        termStructure.linkTo(ext::make_shared<ZeroCurve>(curveDates, zeroRates, setup.dayCounter));
+    }
+
+    // Re-extract process initial values, swap rate, and OIS discounts after a bump
+    void refreshIntermediates()
+    {
+        rebuildZeroCurve();
+
+        Array iv = process->initialValues();
+        initRates.resize(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            initRates[k] = extractValue(iv[k]);
+
+        swapRateVal = extractValue(fwdSwap->fairRate());
+
+        if constexpr (UseDualCurve)
+        {
+            oisDiscountFactors.resize(config.size);
+            for (Size k = 0; k < config.size; ++k)
+                oisDiscountFactors[k] = extractValue(discountingCurve->discount(setup.accrualEnd[k]));
+        }
+    }
+
+    // Get the SimpleQuote for flat index q (depo, swap, ois depo, ois swap)
+    ext::shared_ptr<SimpleQuote> getQuote(Size q) const
+    {
+        if (q < config.numDeposits)
+            return depoQuotes[q];
+        q -= config.numDeposits;
+        if (q < config.numSwaps)
+            return swapQuotes[q];
+        if constexpr (UseDualCurve)
+        {
+            q -= config.numSwaps;
+            if (q < config.numOisDeposits)
+                return oisDepoQuotes[q];
+            q -= config.numOisDeposits;
+            return oisSwapQuotes[q];
+        }
+        return {};
+    }
+
+    // Bump quote q by eps, refresh intermediates, return old value
+    double bump(Size q, double eps)
+    {
+        auto quote = getQuote(q);
+        double oldVal = extractValue(quote->value());
+        quote->setValue(oldVal + eps);
+        refreshIntermediates();
+        return oldVal;
+    }
+
+    // Reset quote q to oldVal, refresh intermediates
+    void reset(Size q, double oldVal)
+    {
+        auto quote = getQuote(q);
+        quote->setValue(oldVal);
+        refreshIntermediates();
+    }
+
+    // Run MC simulation using computePathPayoff, return averaged price
+    double runMC(Size nrTrails) const
+    {
+        PayoffVariables<double> vars;
+        vars.initRates.resize(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            vars.initRates[k] = initRates[k];
+        vars.swapRate = swapRateVal;
+        if constexpr (UseDualCurve)
+            vars.oisDiscounts.assign(oisDiscountFactors.begin(), oisDiscountFactors.end());
+
+        double price = 0.0;
+        for (Size n = 0; n < nrTrails; ++n)
+        {
+            double npv = computePathPayoff<double, UseDualCurve, true>(
+                config, setup, process, vars, setup.allRandoms[n]);
+            price += std::max(npv, 0.0);
+        }
+        return price / static_cast<double>(nrTrails);
+    }
+};
 
 } // namespace benchmark
 

@@ -40,6 +40,77 @@ using RealAD = QuantLib::Real;
 using tape_type = RealAD::tape_type;
 
 // ============================================================================
+// FD Benchmark (bump-and-revalue using PricingSetup with SimpleQuote handles)
+// ============================================================================
+
+template <bool UseDualCurve>
+void runFDBenchmarkT(const BenchmarkConfig& config, const LMMSetup& setup,
+                     Size nrTrails, size_t warmup, size_t bench,
+                     double& mean, double& stddev,
+                     ValidationResult* validation = nullptr)
+{
+    std::vector<double> times;
+    const int maxFDPaths = config.getMaxFDPaths();
+
+    if (static_cast<int>(nrTrails) > maxFDPaths)
+    {
+        mean = 0;
+        stddev = 0;
+        return;  // caller checks and marks fd_enabled = false
+    }
+
+    double eps = 1e-5;
+
+    for (size_t iter = 0; iter < warmup + bench; ++iter)
+    {
+        auto t_start = Clock::now();
+
+        // Build curves once with SimpleQuote handles
+        PricingSetup<UseDualCurve> pricing(config, setup);
+
+        // Compute base price
+        double basePrice = pricing.runMC(nrTrails);
+
+        // Compute FD sensitivities (bump each rate via SimpleQuote)
+        std::vector<double> derivatives(config.numMarketQuotes());
+        for (Size q = 0; q < config.numMarketQuotes(); ++q)
+        {
+            double oldVal = pricing.bump(q, eps);
+            double bumpedPrice = pricing.runMC(nrTrails);
+            derivatives[q] = (bumpedPrice - basePrice) / eps;
+            pricing.reset(q, oldVal);
+        }
+
+        auto t_end = Clock::now();
+
+        if (iter >= warmup)
+            times.push_back(DurationMs(t_end - t_start).count());
+
+        if (validation && iter == 0)
+            *validation = ValidationResult("FD", basePrice, derivatives);
+    }
+
+    mean = computeMean(times);
+    stddev = computeStddev(times);
+}
+
+inline void runFDBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
+                            Size nrTrails, size_t warmup, size_t bench,
+                            double& mean, double& stddev,
+                            ValidationResult* validation = nullptr)
+{
+    runFDBenchmarkT<false>(config, setup, nrTrails, warmup, bench, mean, stddev, validation);
+}
+
+inline void runFDBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& setup,
+                                     Size nrTrails, size_t warmup, size_t bench,
+                                     double& mean, double& stddev,
+                                     ValidationResult* validation = nullptr)
+{
+    runFDBenchmarkT<true>(config, setup, nrTrails, warmup, bench, mean, stddev, validation);
+}
+
+// ============================================================================
 // XAD Tape-based AAD Benchmark (unified single/dual-curve)
 // ============================================================================
 
@@ -1523,7 +1594,8 @@ std::vector<TimingResult> runAADBenchmark(const BenchmarkConfig& config,
                                            ValidationResult* xadValidation = nullptr,
                                            ValidationResult* xadSplitValidation = nullptr,
                                            ValidationResult* jitValidation = nullptr,
-                                           ValidationResult* jitAvxValidation = nullptr)
+                                           ValidationResult* jitAvxValidation = nullptr,
+                                           ValidationResult* fdValidation = nullptr)
 {
     std::vector<TimingResult> results;
 
@@ -1561,6 +1633,25 @@ std::vector<TimingResult> runAADBenchmark(const BenchmarkConfig& config,
 
         // Capture validation at VALIDATION_PATH_COUNT
         bool captureValidation = (paths == VALIDATION_PATH_COUNT);
+
+        // FD (bump-and-revalue) - only for path counts within FD limit
+        if (paths <= config.getMaxFDPaths())
+        {
+            // FD is expensive, use reduced iterations
+            size_t fd_warmup, fd_bench;
+            if (paths >= 10000) {
+                fd_warmup = 0;
+                fd_bench = 1;
+            } else {
+                fd_warmup = quickMode ? 0 : 1;
+                fd_bench = quickMode ? 1 : 2;
+            }
+            runFDBenchmark(config, setup, nrTrails, fd_warmup, fd_bench,
+                           result.fd_mean, result.fd_std,
+                           captureValidation ? fdValidation : nullptr);
+            result.fd_enabled = true;
+            std::cout << "FD=" << std::fixed << std::setprecision(1) << result.fd_mean << "ms ";
+        }
 
         // XAD tape
         runXADBenchmark(config, setup, nrTrails, warmup, bench,
@@ -1618,7 +1709,8 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
                                                     ValidationResult* xadValidation = nullptr,
                                                     ValidationResult* xadSplitValidation = nullptr,
                                                     ValidationResult* jitValidation = nullptr,
-                                                    ValidationResult* jitAvxValidation = nullptr)
+                                                    ValidationResult* jitAvxValidation = nullptr,
+                                                    ValidationResult* fdValidation = nullptr)
 {
     std::vector<TimingResult> results;
 
@@ -1657,6 +1749,24 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
 
         // Capture validation at VALIDATION_PATH_COUNT
         bool captureValidation = (paths == VALIDATION_PATH_COUNT);
+
+        // FD (bump-and-revalue, dual-curve) - only for path counts within FD limit
+        if (paths <= config.getMaxFDPaths())
+        {
+            size_t fd_warmup, fd_bench;
+            if (paths >= 10000) {
+                fd_warmup = 0;
+                fd_bench = 1;
+            } else {
+                fd_warmup = quickMode ? 0 : 1;
+                fd_bench = quickMode ? 1 : 2;
+            }
+            runFDBenchmarkDualCurve(config, setup, nrTrails, fd_warmup, fd_bench,
+                                     result.fd_mean, result.fd_std,
+                                     captureValidation ? fdValidation : nullptr);
+            result.fd_enabled = true;
+            std::cout << "FD=" << std::fixed << std::setprecision(1) << result.fd_mean << "ms ";
+        }
 
         // XAD tape (dual-curve)
         runXADBenchmarkDualCurve(config, setup, nrTrails, warmup, bench,
@@ -1905,12 +2015,14 @@ int main(int argc, char* argv[])
         BenchmarkConfig liteConfig;
         printBenchmarkHeader(liteConfig, benchmarkNum++);
 
-        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
+        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation, fdValidation;
         auto results = runAADBenchmark(liteConfig, quickMode, xadOnly,
-                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
+                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation, &fdValidation);
         printResultsTable(results);
         printResultsFooter(liteConfig);
         outputResultsForParsing(results, liteConfig.configId);
+        if (!fdValidation.sensitivities.empty())
+            outputValidationData(fdValidation, liteConfig.configId);
         if (!xadValidation.sensitivities.empty())
             outputValidationData(xadValidation, liteConfig.configId);
         if (!xadSplitValidation.sensitivities.empty())
@@ -1927,12 +2039,14 @@ int main(int argc, char* argv[])
         liteExtConfig.setLiteExtendedConfig();
         printBenchmarkHeader(liteExtConfig, benchmarkNum++);
 
-        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
+        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation, fdValidation;
         auto results = runAADBenchmark(liteExtConfig, quickMode, xadOnly,
-                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
+                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation, &fdValidation);
         printResultsTable(results);
         printResultsFooter(liteExtConfig);
         outputResultsForParsing(results, liteExtConfig.configId);
+        if (!fdValidation.sensitivities.empty())
+            outputValidationData(fdValidation, liteExtConfig.configId);
         if (!xadValidation.sensitivities.empty())
             outputValidationData(xadValidation, liteExtConfig.configId);
         if (!xadSplitValidation.sensitivities.empty())
@@ -1949,12 +2063,14 @@ int main(int argc, char* argv[])
         prodConfig.setProductionConfig();
         printBenchmarkHeader(prodConfig, benchmarkNum++);
 
-        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
+        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation, fdValidation;
         auto results = runAADBenchmarkDualCurve(prodConfig, quickMode, xadOnly,
-                                                &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
+                                                &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation, &fdValidation);
         printResultsTable(results);
         printResultsFooter(prodConfig);
         outputResultsForParsing(results, prodConfig.configId);
+        if (!fdValidation.sensitivities.empty())
+            outputValidationData(fdValidation, prodConfig.configId);
         if (!xadValidation.sensitivities.empty())
             outputValidationData(xadValidation, prodConfig.configId);
         if (!xadSplitValidation.sensitivities.empty())
