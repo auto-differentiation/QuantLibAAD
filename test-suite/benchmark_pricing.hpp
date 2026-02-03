@@ -40,6 +40,7 @@
 #include <ql/math/matrix.hpp>
 #include <vector>
 #include <cmath>
+#include <type_traits>
 
 namespace benchmark {
 
