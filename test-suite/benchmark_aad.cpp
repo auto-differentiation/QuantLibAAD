@@ -499,90 +499,53 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         auto t_jacobian_end = Clock::now();
 
         // Phase 2: MC simulation with per-path XAD tape
-        // Uses the same Array-based MC loop as priceSwaption, with tape per path
+        // Same structure as JIT but re-record tape each path instead of executing compiled kernel
         tape_type mcTape;
         double mcPrice = 0.0;
         std::vector<double> dPrice_dIntermediates(curve.numIntermediates, 0.0);
 
-        // Cache intermediate values as doubles
+        // Cache intermediate values as doubles (same as JIT)
         std::vector<double> initRatesVal(config.size);
         for (Size k = 0; k < config.size; ++k)
             initRatesVal[k] = value(curve.initRates[k]);
         double swapRateVal = value(curve.swapRate);
 
-        // Separate input variables for tape registration (survive process->evolve reassignment)
-        Array inputRates(config.size);
-        RealAD inputSwapRate;
+        // Pre-allocate PayoffVariables outside the loop to avoid per-path heap allocation
+        PayoffVariables<RealAD> vars;
+        vars.initRates.resize(config.size);
 
         for (Size n = 0; n < nrTrails; ++n)
         {
+            // Clear tape for each path (reuses internal memory)
             mcTape.clearAll();
 
-            // Register inputs (initRates + swapRate)
+            // Register inputs: initRates, swapRate (NOT randoms - they're constants)
             for (Size k = 0; k < config.size; ++k)
             {
-                inputRates[k] = initRatesVal[k];
-                mcTape.registerInput(inputRates[k]);
+                vars.initRates[k] = initRatesVal[k];
+                mcTape.registerInput(vars.initRates[k]);
             }
-            inputSwapRate = swapRateVal;
-            mcTape.registerInput(inputSwapRate);
+            vars.swapRate = swapRateVal;
+            mcTape.registerInput(vars.swapRate);
 
             mcTape.newRecording();
 
-            // Copy registered inputs into working Array (taped copy)
-            Array asset(config.size);
-            for (Size k = 0; k < config.size; ++k)
-                asset[k] = inputRates[k];
+            // Compute payoff using process->evolve() (UseCustomEvolve=false by default)
+            RealAD npv = computePathPayoff<RealAD, false>(config, setup, curve.process, vars, setup.allRandoms[n]);
 
-            // MC body: same as priceSwaption (Array-based, process->evolve)
-            Array assetAtExercise(config.size);
-            for (Size step = 1; step <= setup.fullGridSteps; ++step)
-            {
-                Size offset = (step - 1) * setup.numFactors;
-                Time t = setup.grid[step - 1];
-                Time dt = setup.grid.dt(step - 1);
-
-                Array dw(setup.numFactors);
-                for (Size f = 0; f < setup.numFactors; ++f)
-                    dw[f] = setup.allRandoms[n][offset + f];
-
-                asset = curve.process->evolve(t, asset, dt, dw);
-
-                if (step == setup.exerciseStep)
-                {
-                    for (Size k = 0; k < config.size; ++k)
-                        assetAtExercise[k] = asset[k];
-                }
-            }
-
-            // Discount factors from forward rates (single-curve)
-            Real df = Real(1.0);
-            Array dis(config.size);
-            for (Size k = 0; k < config.size; ++k)
-            {
-                Real accrual = setup.accrualEnd[k] - setup.accrualStart[k];
-                df = df / (Real(1.0) + assetAtExercise[k] * accrual);
-                dis[k] = df;
-            }
-
-            // NPV
-            RealAD npv = RealAD(0.0);
-            for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
-            {
-                Real accrual = setup.accrualEnd[m] - setup.accrualStart[m];
-                npv += (inputSwapRate - assetAtExercise[m]) * accrual * dis[m];
-            }
-
+            // Payoff = max(npv, 0)
             RealAD payoff = (value(npv) > 0.0) ? npv : RealAD(0.0);
 
+            // Compute adjoints for this path
             mcTape.registerOutput(payoff);
             derivative(payoff) = 1.0;
             mcTape.computeAdjoints();
 
+            // Accumulate (same as JIT)
             mcPrice += value(payoff);
             for (Size k = 0; k < config.size; ++k)
-                dPrice_dIntermediates[k] += derivative(inputRates[k]);
-            dPrice_dIntermediates[config.size] += derivative(inputSwapRate);
+                dPrice_dIntermediates[k] += derivative(vars.initRates[k]);
+            dPrice_dIntermediates[config.size] += derivative(vars.swapRate);
         }
 
         // Average
@@ -638,13 +601,12 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
 
         auto t_jacobian_end = Clock::now();
 
-        // Phase 2: MC simulation with per-path XAD tape
-        // Uses the same Array-based MC loop as priceSwaptionDualCurve, with tape per path
+        // Phase 2: MC simulation with per-path tape (like JIT but interpreted)
         tape_type mcTape;
         double mcPrice = 0.0;
         std::vector<double> dPrice_dIntermediates(curve.numIntermediates, 0.0);
 
-        // Cache intermediate values as doubles
+        // Cache intermediate values as doubles (same as JIT)
         std::vector<double> initRatesVal(config.size);
         for (Size k = 0; k < config.size; ++k)
             initRatesVal[k] = value(curve.initRates[k]);
@@ -653,77 +615,51 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
         for (Size k = 0; k < config.size; ++k)
             oisDiscountsVal[k] = value(curve.intermediates[config.size + 1 + k]);
 
-        // Separate input variables for tape registration (survive process->evolve reassignment)
-        Array inputRates(config.size);
-        RealAD inputSwapRate;
-        Array inputOisDiscounts(config.size);
+        // Pre-allocate PayoffVariables outside the loop to avoid per-path heap allocation
+        PayoffVariables<RealAD> vars;
+        vars.initRates.resize(config.size);
+        vars.oisDiscounts.resize(config.size);
 
         for (Size n = 0; n < nrTrails; ++n)
         {
+            // Clear tape for each path (reuses internal memory)
             mcTape.clearAll();
 
-            // Register inputs: initRates, swapRate, oisDiscounts
+            // Register inputs: initRates, swapRate, oisDiscounts (NOT randoms - they're constants)
             for (Size k = 0; k < config.size; ++k)
             {
-                inputRates[k] = initRatesVal[k];
-                mcTape.registerInput(inputRates[k]);
+                vars.initRates[k] = initRatesVal[k];
+                mcTape.registerInput(vars.initRates[k]);
             }
-            inputSwapRate = swapRateVal;
-            mcTape.registerInput(inputSwapRate);
+            vars.swapRate = swapRateVal;
+            mcTape.registerInput(vars.swapRate);
+
             for (Size k = 0; k < config.size; ++k)
             {
-                inputOisDiscounts[k] = oisDiscountsVal[k];
-                mcTape.registerInput(inputOisDiscounts[k]);
+                vars.oisDiscounts[k] = oisDiscountsVal[k];
+                mcTape.registerInput(vars.oisDiscounts[k]);
             }
 
             mcTape.newRecording();
 
-            // Copy registered inputs into working Array (taped copy)
-            Array asset(config.size);
-            for (Size k = 0; k < config.size; ++k)
-                asset[k] = inputRates[k];
+            // Compute payoff using process->evolve() (UseCustomEvolve=false by default)
+            RealAD npv = computePathPayoff<RealAD, true>(config, setup, curve.process, vars, setup.allRandoms[n]);
 
-            // MC body: same as priceSwaptionDualCurve (Array-based, process->evolve)
-            Array assetAtExercise(config.size);
-            for (Size step = 1; step <= setup.fullGridSteps; ++step)
-            {
-                Size offset = (step - 1) * setup.numFactors;
-                Time t = setup.grid[step - 1];
-                Time dt = setup.grid.dt(step - 1);
-
-                Array dw(setup.numFactors);
-                for (Size f = 0; f < setup.numFactors; ++f)
-                    dw[f] = setup.allRandoms[n][offset + f];
-
-                asset = curve.process->evolve(t, asset, dt, dw);
-
-                if (step == setup.exerciseStep)
-                {
-                    for (Size k = 0; k < config.size; ++k)
-                        assetAtExercise[k] = asset[k];
-                }
-            }
-
-            // NPV using OIS discount factors (dual-curve)
-            RealAD npv = RealAD(0.0);
-            for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
-            {
-                Real accrual = setup.accrualEnd[m] - setup.accrualStart[m];
-                npv += (inputSwapRate - assetAtExercise[m]) * accrual * inputOisDiscounts[m];
-            }
-
+            // max(npv, 0)
             RealAD payoff = (value(npv) > 0.0) ? npv : RealAD(0.0);
 
+            // Compute adjoints for this path
             mcTape.registerOutput(payoff);
             derivative(payoff) = 1.0;
             mcTape.computeAdjoints();
 
+            // Accumulate (same as JIT)
             mcPrice += value(payoff);
             for (Size k = 0; k < config.size; ++k)
-                dPrice_dIntermediates[k] += derivative(inputRates[k]);
-            dPrice_dIntermediates[config.size] += derivative(inputSwapRate);
+                dPrice_dIntermediates[k] += derivative(vars.initRates[k]);
+            dPrice_dIntermediates[config.size] += derivative(vars.swapRate);
             for (Size k = 0; k < config.size; ++k)
-                dPrice_dIntermediates[config.size + 1 + k] += derivative(inputOisDiscounts[k]);
+                dPrice_dIntermediates[config.size + 1 + k] += derivative(vars.oisDiscounts[k]);
         }
 
         // Average

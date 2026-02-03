@@ -317,18 +317,13 @@ ADType computePathPayoff(
             for (Size f = 0; f < setup.numFactors; ++f)
                 dw[f] = randoms[offset + f];
 
-            // Convert vector<ADType> -> Array (Real), evolve, convert back
+            // Convert vector<ADType> -> Array, evolve, convert back
             Array assetArr(config.size);
             for (Size k = 0; k < config.size; ++k)
                 assetArr[k] = asset[k];
             assetArr = process->evolve(t, assetArr, dt, dw);
             for (Size k = 0; k < config.size; ++k)
-            {
-                if constexpr (std::is_same_v<ADType, Real>)
-                    asset[k] = assetArr[k];           // AReal = AReal (preserves tape)
-                else
-                    asset[k] = extractValue(assetArr[k]); // double = value(AReal)
-            }
+                asset[k] = assetArr[k];
         }
 
         if (step == setup.exerciseStep)
@@ -927,64 +922,22 @@ struct PricingSetup
         refreshIntermediates();
     }
 
-    // Run MC simulation using Array objects directly (same as priceSwaption)
-    // This avoids the vector<double> ↔ Array conversion overhead in computePathPayoff.
+    // Run MC simulation using computePathPayoff, return averaged price
     double runMC(Size nrTrails) const
     {
+        PayoffVariables<double> vars;
+        vars.initRates.resize(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            vars.initRates[k] = initRates[k];
+        vars.swapRate = swapRateVal;
+        if constexpr (UseDualCurve)
+            vars.oisDiscounts.assign(oisDiscountFactors.begin(), oisDiscountFactors.end());
+
         double price = 0.0;
         for (Size n = 0; n < nrTrails; ++n)
         {
-            Array asset(config.size);
-            for (Size k = 0; k < config.size; ++k)
-                asset[k] = initRates[k];
-
-            Array assetAtExercise(config.size);
-            for (Size step = 1; step <= setup.fullGridSteps; ++step)
-            {
-                Size offset = (step - 1) * setup.numFactors;
-                Time t = setup.grid[step - 1];
-                Time dt = setup.grid.dt(step - 1);
-
-                Array dw(setup.numFactors);
-                for (Size f = 0; f < setup.numFactors; ++f)
-                    dw[f] = setup.allRandoms[n][offset + f];
-
-                asset = process->evolve(t, asset, dt, dw);
-
-                if (step == setup.exerciseStep)
-                {
-                    for (Size k = 0; k < config.size; ++k)
-                        assetAtExercise[k] = asset[k];
-                }
-            }
-
-            // Extract double values from Array (which holds Real=AReal in XAD builds)
-            double npv = 0.0;
-            if constexpr (UseDualCurve)
-            {
-                for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
-                {
-                    double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
-                    npv += (swapRateVal - extractValue(assetAtExercise[m])) * accrual * oisDiscountFactors[m];
-                }
-            }
-            else
-            {
-                double df = 1.0;
-                std::vector<double> dis(config.size);
-                for (Size k = 0; k < config.size; ++k)
-                {
-                    double accrual = setup.accrualEnd[k] - setup.accrualStart[k];
-                    df = df / (1.0 + extractValue(assetAtExercise[k]) * accrual);
-                    dis[k] = df;
-                }
-                for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
-                {
-                    double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
-                    npv += (swapRateVal - extractValue(assetAtExercise[m])) * accrual * dis[m];
-                }
-            }
-
+            double npv = computePathPayoff<double, UseDualCurve>(
+                config, setup, process, vars, setup.allRandoms[n]);
             price += std::max(npv, 0.0);
         }
         return price / static_cast<double>(nrTrails);
