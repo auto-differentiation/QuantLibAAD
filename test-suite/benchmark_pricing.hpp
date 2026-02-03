@@ -36,6 +36,11 @@
 #include <ql/math/randomnumbers/rngtraits.hpp>
 #include <ql/methods/montecarlo/multipathgenerator.hpp>
 
+// Additional includes for matrix operations
+#include <ql/math/matrix.hpp>
+#include <vector>
+#include <cmath>
+
 namespace benchmark {
 
 // ============================================================================
@@ -190,8 +195,9 @@ struct LMMSetup
 template <typename ArrayType>
 void evolveWithMatrices(
     ArrayType& asset,
-    const Matrix& diff,
-    const Matrix& covariance,
+    const std::vector<double>& diff, // Flattened diffusion matrix
+    const std::vector<double>& covariance, // Flattened covariance matrix
+    Size numFactors, // Needed for diff stride
     const std::vector<Time>& accrualStart,
     const std::vector<Time>& accrualEnd,
     Size m,
@@ -216,13 +222,13 @@ void evolveWithMatrices(
         // Drift term using m1
         ElemType drift1 = ElemType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j][k];
-        const ElemType d = (drift1 - ElemType(0.5) * covariance[k][k]) * dt;
+            drift1 = drift1 + m1[j] * covariance[j * size + k]; // Flattened access
+        const ElemType d = (drift1 - ElemType(0.5) * covariance[k * size + k]) * dt; // Flattened access
 
         // Diffusion term
         ElemType r = ElemType(0.0);
         for (Size f = 0; f < dw.size(); ++f)
-            r = r + diff[k][f] * dw[f];
+            r = r + diff[k * numFactors + f] * dw[f]; // Flattened access
         r = r * sdt;
 
         // Corrector step
@@ -232,10 +238,10 @@ void evolveWithMatrices(
         // Drift term using m2
         ElemType drift2 = ElemType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j][k];
+            drift2 = drift2 + m2[j] * covariance[j * size + k]; // Flattened access
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ElemType(0.5) * (d + (drift2 - ElemType(0.5) * covariance[k][k]) * dt) + r);
+        asset[k] = asset[k] * exp(ElemType(0.5) * (d + (drift2 - ElemType(0.5) * covariance[k * size + k]) * dt) + r); // Flattened access
     }
 }
 
@@ -316,8 +322,8 @@ RealType priceSwaption(const BenchmarkConfig& config,
 
     // Pre-compute matrices for each step (computed once, not per path!)
     // This is the key optimization: matrices depend only on time, not on path
-    std::vector<Matrix> stepDiff(setup.fullGridSteps);
-    std::vector<Matrix> stepCov(setup.fullGridSteps);
+    std::vector<std::vector<double>> stepDiff(setup.fullGridSteps);
+    std::vector<std::vector<double>> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -325,8 +331,20 @@ RealType priceSwaption(const BenchmarkConfig& config,
     for (Size step = 1; step <= setup.fullGridSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
-        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
+        Matrix diff = process->covarParam()->diffusion(t0, Array());
+        Matrix cov = process->covarParam()->covariance(t0, Array());
+        
+        // Flatten matrices
+        stepDiff[step - 1].resize(diff.rows() * diff.columns());
+        for(Size i=0; i<diff.rows(); ++i)
+            for(Size j=0; j<diff.columns(); ++j)
+                stepDiff[step - 1][i * diff.columns() + j] = diff[i][j];
+
+        stepCov[step - 1].resize(cov.rows() * cov.columns());
+        for(Size i=0; i<cov.rows(); ++i)
+            for(Size j=0; j<cov.columns(); ++j)
+                stepCov[step - 1][i * cov.columns() + j] = cov[i][j];
+
         stepM[step - 1] = process->nextIndexReset(t0);
         stepDt[step - 1] = setup.grid.dt(step - 1);
         stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
@@ -354,7 +372,7 @@ RealType priceSwaption(const BenchmarkConfig& config,
                 dw[f] = setup.allRandoms[n][offset + f];
 
             // Use pre-computed matrices instead of process->evolve()
-            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1], setup.numFactors,
                                accrualStart, accrualEnd, stepM[step - 1],
                                stepSdt[step - 1], stepDt[step - 1], dw);
 
@@ -528,8 +546,8 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
     // ========================================================================
     // Pre-compute matrices for each step (computed once, not per path!)
     // ========================================================================
-    std::vector<Matrix> stepDiff(setup.fullGridSteps);
-    std::vector<Matrix> stepCov(setup.fullGridSteps);
+    std::vector<std::vector<double>> stepDiff(setup.fullGridSteps);
+    std::vector<std::vector<double>> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -537,8 +555,20 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
     for (Size step = 1; step <= setup.fullGridSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
-        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
+        Matrix diff = process->covarParam()->diffusion(t0, Array());
+        Matrix cov = process->covarParam()->covariance(t0, Array());
+        
+        // Flatten matrices
+        stepDiff[step - 1].resize(diff.rows() * diff.columns());
+        for(Size i=0; i<diff.rows(); ++i)
+            for(Size j=0; j<diff.columns(); ++j)
+                stepDiff[step - 1][i * diff.columns() + j] = diff[i][j];
+
+        stepCov[step - 1].resize(cov.rows() * cov.columns());
+        for(Size i=0; i<cov.rows(); ++i)
+            for(Size j=0; j<cov.columns(); ++j)
+                stepCov[step - 1][i * cov.columns() + j] = cov[i][j];
+
         stepM[step - 1] = process->nextIndexReset(t0);
         stepDt[step - 1] = setup.grid.dt(step - 1);
         stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
@@ -568,7 +598,7 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
                 dw[f] = setup.allRandoms[n][offset + f];
 
             // Use pre-computed matrices instead of process->evolve()
-            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1], setup.numFactors,
                                accrualStart, accrualEnd, stepM[step - 1],
                                stepSdt[step - 1], stepDt[step - 1], dw);
 
