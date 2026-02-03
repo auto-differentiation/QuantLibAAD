@@ -89,20 +89,81 @@ std::vector<TimingResult> runFDBenchmarkT(const BenchmarkConfig& config, bool qu
         {
             auto t_start = Clock::now();
 
-            // Build curves once with SimpleQuote handles
-            PricingSetup<UseDualCurve> pricing(config, setup);
+            // Base rates as plain double
+            std::vector<double> baseDepo(config.depoRates.begin(), config.depoRates.end());
+            std::vector<double> baseSwap(config.swapRates.begin(), config.swapRates.end());
+            std::vector<double> baseOisDepo;
+            std::vector<double> baseOisSwap;
+            if constexpr (UseDualCurve)
+            {
+                baseOisDepo.assign(config.oisDepoRates.begin(), config.oisDepoRates.end());
+                baseOisSwap.assign(config.oisSwapRates.begin(), config.oisSwapRates.end());
+            }
 
             // Compute base price
-            double basePrice = pricing.runMC(nrTrails);
+            double basePrice;
+            if constexpr (UseDualCurve)
+                basePrice = priceSwaptionDualCurve<double>(
+                    config, setup, baseDepo, baseSwap, baseOisDepo, baseOisSwap, nrTrails);
+            else
+                basePrice = priceSwaption<double>(config, setup, baseDepo, baseSwap, nrTrails);
 
-            // Compute FD sensitivities (bump each rate via SimpleQuote)
+            // Compute FD sensitivities (bump each rate)
             std::vector<double> derivatives(config.numMarketQuotes());
-            for (Size q = 0; q < config.numMarketQuotes(); ++q)
+            Size q = 0;
+
+            // Bump forecasting curve deposits
+            for (Size idx = 0; idx < config.numDeposits; ++idx, ++q)
             {
-                double oldVal = pricing.bump(q, eps);
-                double bumpedPrice = pricing.runMC(nrTrails);
+                std::vector<double> bumpedDepo = baseDepo;
+                bumpedDepo[idx] += eps;
+
+                double bumpedPrice;
+                if constexpr (UseDualCurve)
+                    bumpedPrice = priceSwaptionDualCurve<double>(
+                        config, setup, bumpedDepo, baseSwap, baseOisDepo, baseOisSwap, nrTrails);
+                else
+                    bumpedPrice = priceSwaption<double>(config, setup, bumpedDepo, baseSwap, nrTrails);
                 derivatives[q] = (bumpedPrice - basePrice) / eps;
-                pricing.reset(q, oldVal);
+            }
+
+            // Bump forecasting curve swaps
+            for (Size idx = 0; idx < config.numSwaps; ++idx, ++q)
+            {
+                std::vector<double> bumpedSwap = baseSwap;
+                bumpedSwap[idx] += eps;
+
+                double bumpedPrice;
+                if constexpr (UseDualCurve)
+                    bumpedPrice = priceSwaptionDualCurve<double>(
+                        config, setup, baseDepo, bumpedSwap, baseOisDepo, baseOisSwap, nrTrails);
+                else
+                    bumpedPrice = priceSwaption<double>(config, setup, baseDepo, bumpedSwap, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump discounting curve (OIS) for dual-curve only
+            if constexpr (UseDualCurve)
+            {
+                for (Size idx = 0; idx < config.numOisDeposits; ++idx, ++q)
+                {
+                    std::vector<double> bumpedOisDepo = baseOisDepo;
+                    bumpedOisDepo[idx] += eps;
+
+                    double bumpedPrice = priceSwaptionDualCurve<double>(
+                        config, setup, baseDepo, baseSwap, bumpedOisDepo, baseOisSwap, nrTrails);
+                    derivatives[q] = (bumpedPrice - basePrice) / eps;
+                }
+
+                for (Size idx = 0; idx < config.numOisSwaps; ++idx, ++q)
+                {
+                    std::vector<double> bumpedOisSwap = baseOisSwap;
+                    bumpedOisSwap[idx] += eps;
+
+                    double bumpedPrice = priceSwaptionDualCurve<double>(
+                        config, setup, baseDepo, baseSwap, baseOisDepo, bumpedOisSwap, nrTrails);
+                    derivatives[q] = (bumpedPrice - basePrice) / eps;
+                }
             }
 
             auto t_end = Clock::now();

@@ -470,8 +470,147 @@ CurveSetupResult buildDualCurveAndJacobian(
     return result;
 }
 
-// PayoffVariables, evolveLMM, and computePathPayoff are defined in
-// benchmark_pricing.hpp (shared between FD, JIT, and XAD-Split)
+// ============================================================================
+// Shared Payoff Recording - used by both JIT and XAD-Split
+// ============================================================================
+
+// Variables holder for payoff computation (templated on AD type)
+template <typename ADType>
+struct PayoffVariables {
+    std::vector<ADType> initRates;
+    ADType swapRate;
+    std::vector<ADType> oisDiscounts;  // Empty for single-curve
+    std::vector<ADType> randoms;       // For JIT only; XAD-Split uses plain doubles
+};
+
+// Custom LMM evolve function using LOCAL arrays instead of process's mutable members.
+// This fixes XAD-Split tape recording issues caused by mutable state in process->evolve().
+// Implements the same predictor-corrector scheme as LiborForwardModelProcess::evolve().
+template <typename ADType, typename RandomsType>
+void evolveLMM(
+    std::vector<ADType>& asset,
+    const ext::shared_ptr<LiborForwardModelProcess>& process,
+    double t0,
+    double dt,
+    Size numFactors,
+    const RandomsType& randoms,
+    Size randomOffset)
+{
+    const Size size = asset.size();
+    const Size m = process->nextIndexReset(t0);
+    const ADType sdt = ADType(std::sqrt(dt));
+
+    // Get covariance parameters (these are constant, not AD)
+    Matrix diff = process->covarParam()->diffusion(t0, Array());
+    Matrix covariance = process->covarParam()->covariance(t0, Array());
+
+    // Get accrual periods (constants, not AD)
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+    std::vector<double> tau(size);
+    for (Size k = 0; k < size; ++k)
+    {
+        tau[k] = value(accrualEnd[k]) - value(accrualStart[k]);
+    }
+
+    // LOCAL arrays for predictor-corrector (no mutable state!)
+    std::vector<ADType> m1(size);
+    std::vector<ADType> m2(size);
+
+    // Build dw from randoms
+    std::vector<ADType> dw(numFactors);
+    for (Size f = 0; f < numFactors; ++f)
+        dw[f] = randoms[randomOffset + f];
+
+    for (Size k = m; k < size; ++k)
+    {
+        // Predictor step
+        const ADType y = tau[k] * asset[k];
+        m1[k] = y / (ADType(1.0) + y);
+
+        // Drift term using m1
+        ADType drift1 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
+
+        // Diffusion term
+        ADType r = ADType(0.0);
+        for (Size f = 0; f < numFactors; ++f)
+            r = r + diff[k][f] * dw[f];
+        r = r * sdt;
+
+        // Corrector step
+        const ADType x = y * exp(d + r);
+        m2[k] = x / (ADType(1.0) + x);
+
+        // Drift term using m2
+        ADType drift2 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift2 = drift2 + m2[j] * covariance[j][k];
+
+        // Final evolved rate
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
+    }
+}
+
+// Compute the MC path payoff (shared between JIT and XAD-Split)
+// RandomsType: std::vector<double> for XAD-Split, std::vector<xad::AD> for JIT
+template <typename ADType, bool UseDualCurve, typename RandomsType>
+ADType computePathPayoff(
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    const ext::shared_ptr<LiborForwardModelProcess>& process,
+    PayoffVariables<ADType>& vars,
+    const RandomsType& randoms)
+{
+    std::vector<ADType> asset(config.size);
+    std::vector<ADType> assetAtExercise(config.size);
+    for (Size k = 0; k < config.size; ++k)
+        asset[k] = vars.initRates[k];
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Size offset = (step - 1) * setup.numFactors;
+
+        // Use custom evolveLMM with LOCAL arrays instead of process->evolve()
+        // This fixes XAD-Split tape recording issues caused by mutable member arrays
+        double t0 = value(setup.grid[step - 1]);
+        double dt = value(setup.grid.dt(step - 1));
+        evolveLMM(asset, process, t0, dt, setup.numFactors, randoms, offset);
+
+        if (step == setup.exerciseStep)
+            for (Size k = 0; k < config.size; ++k)
+                assetAtExercise[k] = asset[k];
+    }
+
+    std::vector<ADType> dis(config.size);
+    if constexpr (UseDualCurve)
+    {
+        // Dual-curve: use OIS discount factors directly
+        for (Size k = 0; k < config.size; ++k)
+            dis[k] = vars.oisDiscounts[k];
+    }
+    else
+    {
+        // Single-curve: compute discount factors from forward rates
+        ADType df = ADType(1.0);
+        for (Size k = 0; k < config.size; ++k)
+        {
+            double accrual = setup.accrualEnd[k] - setup.accrualStart[k];
+            df = df / (ADType(1.0) + assetAtExercise[k] * accrual);
+            dis[k] = df;
+        }
+    }
+
+    ADType npv = ADType(0.0);
+    for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
+    {
+        double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
+        npv = npv + (vars.swapRate - assetAtExercise[m]) * accrual * dis[m];
+    }
+    return npv;
+}
 
 // ============================================================================
 // XAD-Split Benchmark: Jacobian + per-path XAD tape MC + chain rule
@@ -510,14 +649,15 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
             initRatesVal[k] = value(curve.initRates[k]);
         double swapRateVal = value(curve.swapRate);
 
-        // Pre-allocate PayoffVariables outside the loop to avoid per-path heap allocation
-        PayoffVariables<RealAD> vars;
-        vars.initRates.resize(config.size);
-
         for (Size n = 0; n < nrTrails; ++n)
         {
             // Clear tape for each path (reuses internal memory)
             mcTape.clearAll();
+
+            // Setup payoff variables - only initRates and swapRate are AD inputs
+            // Randoms are NOT AD inputs (same as full XAD benchmark)
+            PayoffVariables<RealAD> vars;
+            vars.initRates.resize(config.size);
 
             // Register inputs: initRates, swapRate (NOT randoms - they're constants)
             for (Size k = 0; k < config.size; ++k)
@@ -530,7 +670,7 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
 
             mcTape.newRecording();
 
-            // Compute payoff using process->evolve() (UseCustomEvolve=false by default)
+            // Compute payoff - pass randoms as plain doubles (no differentiation through randoms)
             RealAD npv = computePathPayoff<RealAD, false>(config, setup, curve.process, vars, setup.allRandoms[n]);
 
             // Payoff = max(npv, 0)
@@ -615,15 +755,16 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
         for (Size k = 0; k < config.size; ++k)
             oisDiscountsVal[k] = value(curve.intermediates[config.size + 1 + k]);
 
-        // Pre-allocate PayoffVariables outside the loop to avoid per-path heap allocation
-        PayoffVariables<RealAD> vars;
-        vars.initRates.resize(config.size);
-        vars.oisDiscounts.resize(config.size);
-
         for (Size n = 0; n < nrTrails; ++n)
         {
             // Clear tape for each path (reuses internal memory)
             mcTape.clearAll();
+
+            // Setup payoff variables - only initRates, swapRate, oisDiscounts are AD inputs
+            // Randoms are NOT AD inputs (same as full XAD benchmark)
+            PayoffVariables<RealAD> vars;
+            vars.initRates.resize(config.size);
+            vars.oisDiscounts.resize(config.size);
 
             // Register inputs: initRates, swapRate, oisDiscounts (NOT randoms - they're constants)
             for (Size k = 0; k < config.size; ++k)
@@ -642,7 +783,7 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
 
             mcTape.newRecording();
 
-            // Compute payoff using process->evolve() (UseCustomEvolve=false by default)
+            // Compute payoff - pass randoms as plain doubles (no differentiation through randoms)
             RealAD npv = computePathPayoff<RealAD, true>(config, setup, curve.process, vars, setup.allRandoms[n]);
 
             // max(npv, 0)
@@ -774,13 +915,12 @@ void runDiagnosticComparison(const BenchmarkConfig& config, const LMMSetup& setu
     // Store per-path derivatives for comparison
     std::vector<std::vector<double>> xadsplit_path_derivs(nrTrails);
 
-    // Pre-allocate PayoffVariables outside the loop
-    PayoffVariables<RealAD> vars;
-    vars.initRates.resize(config.size);
-
     for (Size n = 0; n < nrTrails; ++n)
     {
         mcTape.clearAll();
+
+        PayoffVariables<RealAD> vars;
+        vars.initRates.resize(config.size);
 
         for (Size k = 0; k < config.size; ++k) {
             vars.initRates[k] = initRatesVal[k];
@@ -987,7 +1127,7 @@ void recordJITGraph(
     jit.newRecording();
 
     // Compute NPV using shared function - pass vars.randoms for JIT graph recording
-    xad::AD npv = computePathPayoff<xad::AD, UseDualCurve, true>(config, setup, curve.process, vars, vars.randoms);
+    xad::AD npv = computePathPayoff<xad::AD, UseDualCurve>(config, setup, curve.process, vars, vars.randoms);
 
     // Payoff = max(npv, 0) - JIT uses xad::less().If() for JIT compatibility
     xad::AD payoff = xad::less(npv, xad::AD(0.0)).If(xad::AD(0.0), npv);
