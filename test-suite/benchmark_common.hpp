@@ -59,10 +59,10 @@ inline double computeStddev(const std::vector<double>& v)
 // ============================================================================
 
 // Maximum paths for finite differences (FD is O(n) per path for n parameters)
-constexpr int FD_MAX_PATHS = 1000000;
+constexpr int FD_MAX_PATHS = 100000;
 
 // Max paths for production config (45 inputs) - same as regular, run all paths
-constexpr int FD_MAX_PATHS_PRODUCTION = 1000000;
+constexpr int FD_MAX_PATHS_PRODUCTION = 100000;
 
 struct BenchmarkConfig
 {
@@ -109,7 +109,7 @@ struct BenchmarkConfig
         swapTenors = {1 * Years, 2 * Years, 3 * Years, 4 * Years, 5 * Years};
         depoRates = {0.0350, 0.0365, 0.0380, 0.0400};
         swapRates = {0.0420, 0.0480, 0.0520, 0.0550, 0.0575};
-        pathCounts = {10, 100, 1000, 10000, 100000, 1000000};
+        pathCounts = {10, 100, 1000, 10000, 100000};
     }
 
     // Lite-Extended config (5Y into 5Y, single curve, 14 sensitivities)
@@ -183,7 +183,7 @@ struct BenchmarkConfig
         curveEndYears = 22;  // Extended for 20Y swap tenors
 
         // Full path counts including 100K for production
-        pathCounts = {10, 100, 1000, 10000, 100000, 1000000};
+        pathCounts = {10, 100, 1000, 10000, 100000};
 
         instrumentDesc = "European swaption (5Y into 5Y, dual-curve)";
         benchmarkName = "Production";
