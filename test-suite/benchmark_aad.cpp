@@ -1018,6 +1018,7 @@ void recordJITGraph(
     xad::JITCompiler<double>& jit,
     const BenchmarkConfig& config,
     const LMMSetup& setup,
+    const LMMStepData& stepData,
     const CurveSetupResult& curve,
     PayoffVariables<xad::AD>& vars);
 
@@ -1129,11 +1130,14 @@ void runDiagnosticComparison(const BenchmarkConfig& config, const LMMSetup& setu
     // =========================================================================
     // Phase 2b: JIT - compiled kernel MC
     // =========================================================================
+    // Pre-compute LMM step data (matrices computed once, not per path!)
+    LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
     auto backend = std::make_unique<xad::forge::ForgeBackend<double>>(false);
     xad::JITCompiler<double> jit(std::move(backend));
 
     PayoffVariables<xad::AD> jit_vars;
-    recordJITGraph<false>(jit, config, setup, curve, jit_vars);
+    recordJITGraph<false>(jit, config, setup, stepData, curve, jit_vars);
     jit.compile();
 
     const auto& graph = jit.getGraph();
@@ -1265,6 +1269,7 @@ void recordJITGraph(
     xad::JITCompiler<double>& jit,
     const BenchmarkConfig& config,
     const LMMSetup& setup,
+    const LMMStepData& stepData,
     const CurveSetupResult& curve,
     PayoffVariables<xad::AD>& vars)
 {
@@ -1298,8 +1303,8 @@ void recordJITGraph(
 
     jit.newRecording();
 
-    // Compute NPV using shared function - pass vars.randoms for JIT graph recording
-    xad::AD npv = computePathPayoff<xad::AD, UseDualCurve>(config, setup, curve.process, vars, vars.randoms);
+    // Compute NPV using pre-computed matrices (optimization!)
+    xad::AD npv = computePathPayoffWithMatrices<xad::AD, UseDualCurve>(config, setup, stepData, vars, vars.randoms);
 
     // Payoff = max(npv, 0) - JIT uses xad::less().If() for JIT compatibility
     xad::AD payoff = xad::less(npv, xad::AD(0.0)).If(xad::AD(0.0), npv);
@@ -1326,12 +1331,15 @@ void runJITBenchmarkImpl(const BenchmarkConfig& config, const LMMSetup& setup,
         tape_type tape;
         CurveSetupResult curve = buildSingleCurveAndJacobian(config, setup, tape);
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         // Phase 2: JIT graph recording and compilation
         auto backend = std::make_unique<BackendType>(false);
         xad::JITCompiler<double> jit(std::move(backend));
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<false>(jit, config, setup, curve, vars);
+        recordJITGraph<false>(jit, config, setup, stepData, curve, vars);
 
         // Compile the JIT kernel
         jit.compile();
@@ -1425,11 +1433,14 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         tape_type tape;
         CurveSetupResult curve = buildSingleCurveAndJacobian(config, setup, tape);
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         // Phase 2: JIT graph recording (using JITCompiler to record only)
         xad::JITCompiler<double> jit;  // Default interpreter - just for recording
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<false>(jit, config, setup, curve, vars);
+        recordJITGraph<false>(jit, config, setup, stepData, curve, vars);
 
         // Get the JIT graph and deactivate
         const auto& jitGraph = jit.getGraph();
@@ -1563,12 +1574,15 @@ void runJITBenchmarkDualCurveImpl(const BenchmarkConfig& config, const LMMSetup&
 
         auto t_curve_end = Clock::now();
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         // Phase 2: JIT graph recording and compilation
         auto backend = std::make_unique<BackendType>(false);
         xad::JITCompiler<double> jit(std::move(backend));
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<true>(jit, config, setup, curve, vars);
+        recordJITGraph<true>(jit, config, setup, stepData, curve, vars);
 
         // Compile the JIT kernel
         jit.compile();
@@ -1687,11 +1701,14 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
 
         auto t_curve_end = Clock::now();
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         // Phase 2: JIT graph recording (using JITCompiler without backend)
         xad::JITCompiler<double> jit;  // Default constructor - for recording only
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<true>(jit, config, setup, curve, vars);
+        recordJITGraph<true>(jit, config, setup, stepData, curve, vars);
 
         // Get the JIT graph and deactivate
         const auto& jitGraph = jit.getGraph();
