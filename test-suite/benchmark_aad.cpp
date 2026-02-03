@@ -488,14 +488,15 @@ struct PayoffVariables {
 // ============================================================================
 
 struct LMMStepData {
-    std::vector<Matrix> diff;         // Diffusion matrices per step
-    std::vector<Matrix> covariance;   // Covariance matrices per step
+    std::vector<std::vector<Real>> diff;       // Flattened diffusion matrices per step
+    std::vector<std::vector<Real>> covariance; // Flattened covariance matrices per step
     std::vector<Size> m;              // nextIndexReset per step
     std::vector<double> dt;           // Time step per step
     std::vector<double> sdt;          // sqrt(dt) per step
     std::vector<double> tau;          // Accrual periods (constant)
     Size numSteps;
     Size numFactors;
+    Size size;                        // Number of forward rates (for stride calculation)
 };
 
 // Pre-compute step data for LMM evolution (call once before path loop)
@@ -507,6 +508,7 @@ inline LMMStepData precomputeLMMStepData(
     LMMStepData data;
     data.numSteps = setup.fullGridSteps;
     data.numFactors = setup.numFactors;
+    data.size = size;
 
     data.diff.resize(data.numSteps);
     data.covariance.resize(data.numSteps);
@@ -517,8 +519,21 @@ inline LMMStepData precomputeLMMStepData(
     for (Size step = 1; step <= data.numSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        data.diff[step - 1] = process->covarParam()->diffusion(t0, Array());
-        data.covariance[step - 1] = process->covarParam()->covariance(t0, Array());
+        Matrix diff = process->covarParam()->diffusion(t0, Array());
+        Matrix cov = process->covarParam()->covariance(t0, Array());
+        
+        // Flatten diffusion matrix - keep as Real for AD correctness
+        data.diff[step - 1].resize(diff.rows() * diff.columns());
+        for (Size i = 0; i < diff.rows(); ++i)
+            for (Size j = 0; j < diff.columns(); ++j)
+                data.diff[step - 1][i * diff.columns() + j] = diff[i][j];
+
+        // Flatten covariance matrix - keep as Real for AD correctness
+        data.covariance[step - 1].resize(cov.rows() * cov.columns());
+        for (Size i = 0; i < cov.rows(); ++i)
+            for (Size j = 0; j < cov.columns(); ++j)
+                data.covariance[step - 1][i * cov.columns() + j] = cov[i][j];
+
         data.m[step - 1] = process->nextIndexReset(t0);
         data.dt[step - 1] = value(setup.grid.dt(step - 1));
         data.sdt[step - 1] = std::sqrt(data.dt[step - 1]);
@@ -536,7 +551,7 @@ inline LMMStepData precomputeLMMStepData(
     return data;
 }
 
-// Optimized LMM evolve using pre-computed matrices (for XAD-Split)
+// Optimized LMM evolve using pre-computed flattened matrices (for XAD-Split)
 template <typename ADType, typename RandomsType>
 void evolveLMMWithMatrices(
     std::vector<ADType>& asset,
@@ -550,8 +565,8 @@ void evolveLMMWithMatrices(
     const Size m = stepData.m[stepIndex];
     const ADType sdt = ADType(stepData.sdt[stepIndex]);
     const double dt = stepData.dt[stepIndex];
-    const Matrix& diff = stepData.diff[stepIndex];
-    const Matrix& covariance = stepData.covariance[stepIndex];
+    const std::vector<Real>& diff = stepData.diff[stepIndex];
+    const std::vector<Real>& covariance = stepData.covariance[stepIndex];
     const std::vector<double>& tau = stepData.tau;
 
     // LOCAL arrays for predictor-corrector (no mutable state!)
@@ -569,29 +584,29 @@ void evolveLMMWithMatrices(
         const ADType y = tau[k] * asset[k];
         m1[k] = y / (ADType(1.0) + y);
 
-        // Drift term using m1
+        // Drift term using m1 (flattened access: covariance[j * size + k])
         ADType drift1 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j][k];
-        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
+            drift1 = drift1 + m1[j] * covariance[j * size + k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k * size + k]) * dt;
 
-        // Diffusion term
+        // Diffusion term (flattened access: diff[k * numFactors + f])
         ADType r = ADType(0.0);
         for (Size f = 0; f < numFactors; ++f)
-            r = r + diff[k][f] * dw[f];
+            r = r + diff[k * numFactors + f] * dw[f];
         r = r * sdt;
 
         // Corrector step
         const ADType x = y * exp(d + r);
         m2[k] = x / (ADType(1.0) + x);
 
-        // Drift term using m2
+        // Drift term using m2 (flattened access)
         ADType drift2 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j][k];
+            drift2 = drift2 + m2[j] * covariance[j * size + k];
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k * size + k]) * dt) + r);
     }
 }
 
@@ -652,6 +667,7 @@ ADType computePathPayoffWithMatrices(
 // Custom LMM evolve function using LOCAL arrays instead of process's mutable members.
 // This fixes XAD-Split tape recording issues caused by mutable state in process->evolve().
 // Implements the same predictor-corrector scheme as LiborForwardModelProcess::evolve().
+// Matrices are flattened for cache-friendly access.
 template <typename ADType, typename RandomsType>
 void evolveLMM(
     std::vector<ADType>& asset,
@@ -666,9 +682,20 @@ void evolveLMM(
     const Size m = process->nextIndexReset(t0);
     const ADType sdt = ADType(std::sqrt(dt));
 
-    // Get covariance parameters (these are constant, not AD)
-    Matrix diff = process->covarParam()->diffusion(t0, Array());
-    Matrix covariance = process->covarParam()->covariance(t0, Array());
+    // Get covariance parameters and flatten for cache-friendly access
+    Matrix diffMat = process->covarParam()->diffusion(t0, Array());
+    Matrix covMat = process->covarParam()->covariance(t0, Array());
+    
+    // Flatten matrices - keep as Real for AD correctness
+    std::vector<Real> diff(diffMat.rows() * diffMat.columns());
+    for (Size i = 0; i < diffMat.rows(); ++i)
+        for (Size j = 0; j < diffMat.columns(); ++j)
+            diff[i * diffMat.columns() + j] = diffMat[i][j];
+
+    std::vector<Real> covariance(covMat.rows() * covMat.columns());
+    for (Size i = 0; i < covMat.rows(); ++i)
+        for (Size j = 0; j < covMat.columns(); ++j)
+            covariance[i * covMat.columns() + j] = covMat[i][j];
 
     // Get accrual periods (constants, not AD)
     const std::vector<Time>& accrualStart = process->accrualStartTimes();
@@ -694,29 +721,29 @@ void evolveLMM(
         const ADType y = tau[k] * asset[k];
         m1[k] = y / (ADType(1.0) + y);
 
-        // Drift term using m1
+        // Drift term using m1 (flattened access)
         ADType drift1 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j][k];
-        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
+            drift1 = drift1 + m1[j] * covariance[j * size + k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k * size + k]) * dt;
 
-        // Diffusion term
+        // Diffusion term (flattened access)
         ADType r = ADType(0.0);
         for (Size f = 0; f < numFactors; ++f)
-            r = r + diff[k][f] * dw[f];
+            r = r + diff[k * numFactors + f] * dw[f];
         r = r * sdt;
 
         // Corrector step
         const ADType x = y * exp(d + r);
         m2[k] = x / (ADType(1.0) + x);
 
-        // Drift term using m2
+        // Drift term using m2 (flattened access)
         ADType drift2 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j][k];
+            drift2 = drift2 + m2[j] * covariance[j * size + k];
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k * size + k]) * dt) + r);
     }
 }
 
