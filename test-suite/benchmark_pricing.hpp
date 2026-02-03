@@ -193,11 +193,11 @@ struct LMMSetup
 // Optimized LMM evolve: uses pre-computed matrices (computed once per step)
 // This matches evolveLMM from benchmark_aad.cpp exactly, but takes matrices as params
 // ============================================================================
-template <typename ArrayType>
+template <typename ArrayType, typename MatrixElemType>
 void evolveWithMatrices(
     ArrayType& asset,
-    const std::vector<double>& diff, // Flattened diffusion matrix
-    const std::vector<double>& covariance, // Flattened covariance matrix
+    const std::vector<MatrixElemType>& diff, // Flattened diffusion matrix
+    const std::vector<MatrixElemType>& covariance, // Flattened covariance matrix
     Size numFactors, // Needed for diff stride
     const std::vector<Time>& accrualStart,
     const std::vector<Time>& accrualEnd,
@@ -323,8 +323,9 @@ RealType priceSwaption(const BenchmarkConfig& config,
 
     // Pre-compute matrices for each step (computed once, not per path!)
     // This is the key optimization: matrices depend only on time, not on path
-    std::vector<std::vector<double>> stepDiff(setup.fullGridSteps);
-    std::vector<std::vector<double>> stepCov(setup.fullGridSteps);
+    // Use Real (which is AReal in AD builds) to preserve AD correctness
+    std::vector<std::vector<Real>> stepDiff(setup.fullGridSteps);
+    std::vector<std::vector<Real>> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -335,7 +336,7 @@ RealType priceSwaption(const BenchmarkConfig& config,
         Matrix diff = process->covarParam()->diffusion(t0, Array());
         Matrix cov = process->covarParam()->covariance(t0, Array());
         
-        // Flatten matrices
+        // Flatten matrices - keep as Real type for AD correctness
         stepDiff[step - 1].resize(diff.rows() * diff.columns());
         for(Size i=0; i<diff.rows(); ++i)
             for(Size j=0; j<diff.columns(); ++j)
@@ -546,9 +547,10 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
 
     // ========================================================================
     // Pre-compute matrices for each step (computed once, not per path!)
+    // Use Real (which is AReal in AD builds) to preserve AD correctness
     // ========================================================================
-    std::vector<std::vector<double>> stepDiff(setup.fullGridSteps);
-    std::vector<std::vector<double>> stepCov(setup.fullGridSteps);
+    std::vector<std::vector<Real>> stepDiff(setup.fullGridSteps);
+    std::vector<std::vector<Real>> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -559,7 +561,7 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
         Matrix diff = process->covarParam()->diffusion(t0, Array());
         Matrix cov = process->covarParam()->covariance(t0, Array());
         
-        // Flatten matrices
+        // Flatten matrices - keep as Real type for AD correctness
         stepDiff[step - 1].resize(diff.rows() * diff.columns());
         for(Size i=0; i<diff.rows(); ++i)
             for(Size j=0; j<diff.columns(); ++j)
