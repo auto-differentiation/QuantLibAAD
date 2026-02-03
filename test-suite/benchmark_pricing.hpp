@@ -936,7 +936,7 @@ struct PricingSetup
         double price = 0.0;
         for (Size n = 0; n < nrTrails; ++n)
         {
-            double npv = computePathPayoff<double, UseDualCurve>(
+            double npv = computePathPayoff<double, UseDualCurve, true>(
                 config, setup, process, vars, setup.allRandoms[n]);
             price += std::max(npv, 0.0);
         }
