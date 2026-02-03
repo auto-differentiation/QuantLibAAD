@@ -483,6 +483,172 @@ struct PayoffVariables {
     std::vector<ADType> randoms;       // For JIT only; XAD-Split uses plain doubles
 };
 
+// ============================================================================
+// Pre-computed LMM Step Data (optimization: compute matrices once, not per path)
+// ============================================================================
+
+struct LMMStepData {
+    std::vector<Matrix> diff;         // Diffusion matrices per step
+    std::vector<Matrix> covariance;   // Covariance matrices per step
+    std::vector<Size> m;              // nextIndexReset per step
+    std::vector<double> dt;           // Time step per step
+    std::vector<double> sdt;          // sqrt(dt) per step
+    std::vector<double> tau;          // Accrual periods (constant)
+    Size numSteps;
+    Size numFactors;
+};
+
+// Pre-compute step data for LMM evolution (call once before path loop)
+inline LMMStepData precomputeLMMStepData(
+    const ext::shared_ptr<LiborForwardModelProcess>& process,
+    const LMMSetup& setup,
+    Size size)
+{
+    LMMStepData data;
+    data.numSteps = setup.fullGridSteps;
+    data.numFactors = setup.numFactors;
+
+    data.diff.resize(data.numSteps);
+    data.covariance.resize(data.numSteps);
+    data.m.resize(data.numSteps);
+    data.dt.resize(data.numSteps);
+    data.sdt.resize(data.numSteps);
+
+    for (Size step = 1; step <= data.numSteps; ++step)
+    {
+        Time t0 = setup.grid[step - 1];
+        data.diff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        data.covariance[step - 1] = process->covarParam()->covariance(t0, Array());
+        data.m[step - 1] = process->nextIndexReset(t0);
+        data.dt[step - 1] = setup.grid.dt(step - 1);
+        data.sdt[step - 1] = std::sqrt(data.dt[step - 1]);
+    }
+
+    // Pre-compute accrual periods
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+    data.tau.resize(size);
+    for (Size k = 0; k < size; ++k)
+    {
+        data.tau[k] = value(accrualEnd[k]) - value(accrualStart[k]);
+    }
+
+    return data;
+}
+
+// Optimized LMM evolve using pre-computed matrices (for XAD-Split)
+template <typename ADType, typename RandomsType>
+void evolveLMMWithMatrices(
+    std::vector<ADType>& asset,
+    const LMMStepData& stepData,
+    Size stepIndex,  // 0-based step index
+    Size numFactors,
+    const RandomsType& randoms,
+    Size randomOffset)
+{
+    const Size size = asset.size();
+    const Size m = stepData.m[stepIndex];
+    const ADType sdt = ADType(stepData.sdt[stepIndex]);
+    const double dt = stepData.dt[stepIndex];
+    const Matrix& diff = stepData.diff[stepIndex];
+    const Matrix& covariance = stepData.covariance[stepIndex];
+    const std::vector<double>& tau = stepData.tau;
+
+    // LOCAL arrays for predictor-corrector (no mutable state!)
+    std::vector<ADType> m1(size);
+    std::vector<ADType> m2(size);
+
+    // Build dw from randoms
+    std::vector<ADType> dw(numFactors);
+    for (Size f = 0; f < numFactors; ++f)
+        dw[f] = randoms[randomOffset + f];
+
+    for (Size k = m; k < size; ++k)
+    {
+        // Predictor step
+        const ADType y = tau[k] * asset[k];
+        m1[k] = y / (ADType(1.0) + y);
+
+        // Drift term using m1
+        ADType drift1 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
+
+        // Diffusion term
+        ADType r = ADType(0.0);
+        for (Size f = 0; f < numFactors; ++f)
+            r = r + diff[k][f] * dw[f];
+        r = r * sdt;
+
+        // Corrector step
+        const ADType x = y * exp(d + r);
+        m2[k] = x / (ADType(1.0) + x);
+
+        // Drift term using m2
+        ADType drift2 = ADType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift2 = drift2 + m2[j] * covariance[j][k];
+
+        // Final evolved rate
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
+    }
+}
+
+// Compute path payoff using pre-computed matrices (optimized for XAD-Split)
+template <typename ADType, bool UseDualCurve, typename RandomsType>
+ADType computePathPayoffWithMatrices(
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    const LMMStepData& stepData,
+    PayoffVariables<ADType>& vars,
+    const RandomsType& randoms)
+{
+    std::vector<ADType> asset(config.size);
+    std::vector<ADType> assetAtExercise(config.size);
+    for (Size k = 0; k < config.size; ++k)
+        asset[k] = vars.initRates[k];
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Size offset = (step - 1) * setup.numFactors;
+
+        // Use pre-computed matrices
+        evolveLMMWithMatrices(asset, stepData, step - 1, setup.numFactors, randoms, offset);
+
+        if (step == setup.exerciseStep)
+            for (Size k = 0; k < config.size; ++k)
+                assetAtExercise[k] = asset[k];
+    }
+
+    std::vector<ADType> dis(config.size);
+    if constexpr (UseDualCurve)
+    {
+        // Dual-curve: use OIS discount factors directly
+        for (Size k = 0; k < config.size; ++k)
+            dis[k] = vars.oisDiscounts[k];
+    }
+    else
+    {
+        // Single-curve: compute discount factors from forward rates
+        ADType df = ADType(1.0);
+        for (Size k = 0; k < config.size; ++k)
+        {
+            double accrual = setup.accrualEnd[k] - setup.accrualStart[k];
+            df = df / (ADType(1.0) + assetAtExercise[k] * accrual);
+            dis[k] = df;
+        }
+    }
+
+    ADType npv = ADType(0.0);
+    for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
+    {
+        double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
+        npv = npv + (vars.swapRate - assetAtExercise[m]) * accrual * dis[m];
+    }
+    return npv;
+}
+
 // Custom LMM evolve function using LOCAL arrays instead of process's mutable members.
 // This fixes XAD-Split tape recording issues caused by mutable state in process->evolve().
 // Implements the same predictor-corrector scheme as LiborForwardModelProcess::evolve().
@@ -635,6 +801,9 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         tape_type jacobianTape;
         CurveSetupResult curve = buildSingleCurveAndJacobian(config, setup, jacobianTape);
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         auto t_jacobian_end = Clock::now();
 
         // Phase 2: MC simulation with per-path XAD tape
@@ -670,8 +839,8 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
 
             mcTape.newRecording();
 
-            // Compute payoff - pass randoms as plain doubles (no differentiation through randoms)
-            RealAD npv = computePathPayoff<RealAD, false>(config, setup, curve.process, vars, setup.allRandoms[n]);
+            // Compute payoff using pre-computed matrices (optimization!)
+            RealAD npv = computePathPayoffWithMatrices<RealAD, false>(config, setup, stepData, vars, setup.allRandoms[n]);
 
             // Payoff = max(npv, 0)
             RealAD payoff = (value(npv) > 0.0) ? npv : RealAD(0.0);
@@ -739,6 +908,9 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
         tape_type jacobianTape;
         CurveSetupResult curve = buildDualCurveAndJacobian(config, setup, jacobianTape);
 
+        // Pre-compute LMM step data (matrices computed once, not per path!)
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
         auto t_jacobian_end = Clock::now();
 
         // Phase 2: MC simulation with per-path tape (like JIT but interpreted)
@@ -783,8 +955,8 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
 
             mcTape.newRecording();
 
-            // Compute payoff - pass randoms as plain doubles (no differentiation through randoms)
-            RealAD npv = computePathPayoff<RealAD, true>(config, setup, curve.process, vars, setup.allRandoms[n]);
+            // Compute payoff using pre-computed matrices (optimization!)
+            RealAD npv = computePathPayoffWithMatrices<RealAD, true>(config, setup, stepData, vars, setup.allRandoms[n]);
 
             // max(npv, 0)
             RealAD payoff = (value(npv) > 0.0) ? npv : RealAD(0.0);

@@ -184,6 +184,62 @@ struct LMMSetup
 };
 
 // ============================================================================
+// Optimized LMM evolve: uses pre-computed matrices (computed once per step)
+// This matches evolveLMM from benchmark_aad.cpp exactly, but takes matrices as params
+// ============================================================================
+template <typename ArrayType>
+void evolveWithMatrices(
+    ArrayType& asset,
+    const Matrix& diff,
+    const Matrix& covariance,
+    const std::vector<Time>& accrualStart,
+    const std::vector<Time>& accrualEnd,
+    Size m,
+    Real sdt,
+    Real dt,
+    const Array& dw)
+{
+    using ElemType = std::decay_t<decltype(asset[0])>;
+    const Size size = asset.size();
+
+    // Local arrays for predictor-corrector (matches evolveLMM)
+    std::vector<ElemType> m1(size);
+    std::vector<ElemType> m2(size);
+
+    for (Size k = m; k < size; ++k)
+    {
+        // Predictor step - use accrual period like original evolve()
+        const ElemType tau = accrualEnd[k] - accrualStart[k];
+        const ElemType y = tau * asset[k];
+        m1[k] = y / (ElemType(1.0) + y);
+
+        // Drift term using m1
+        ElemType drift1 = ElemType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ElemType d = (drift1 - ElemType(0.5) * covariance[k][k]) * dt;
+
+        // Diffusion term
+        ElemType r = ElemType(0.0);
+        for (Size f = 0; f < dw.size(); ++f)
+            r = r + diff[k][f] * dw[f];
+        r = r * sdt;
+
+        // Corrector step
+        const ElemType x = y * exp(d + r);
+        m2[k] = x / (ElemType(1.0) + x);
+
+        // Drift term using m2
+        ElemType drift2 = ElemType(0.0);
+        for (Size j = m; j <= k; ++j)
+            drift2 = drift2 + m2[j] * covariance[j][k];
+
+        // Final evolved rate
+        asset[k] = asset[k] * exp(ElemType(0.5) * (d + (drift2 - ElemType(0.5) * covariance[k][k]) * dt) + r);
+    }
+}
+
+// ============================================================================
 // Templated Monte Carlo Pricing Function
 // ============================================================================
 
@@ -258,7 +314,29 @@ RealType priceSwaption(const BenchmarkConfig& config,
 
     Array initRates = process->initialValues();
 
-    // Monte Carlo simulation
+    // Pre-compute matrices for each step (computed once, not per path!)
+    // This is the key optimization: matrices depend only on time, not on path
+    std::vector<Matrix> stepDiff(setup.fullGridSteps);
+    std::vector<Matrix> stepCov(setup.fullGridSteps);
+    std::vector<Size> stepM(setup.fullGridSteps);
+    std::vector<Real> stepDt(setup.fullGridSteps);
+    std::vector<Real> stepSdt(setup.fullGridSteps);
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Time t0 = setup.grid[step - 1];
+        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
+        stepM[step - 1] = process->nextIndexReset(t0);
+        stepDt[step - 1] = setup.grid.dt(step - 1);
+        stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
+    }
+
+    // Get accrual times from process
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+
+    // Monte Carlo simulation (now uses pre-computed matrices)
     RealType price = RealType(0.0);
     for (Size n = 0; n < nrTrails; ++n)
     {
@@ -270,14 +348,15 @@ RealType priceSwaption(const BenchmarkConfig& config,
         for (Size step = 1; step <= setup.fullGridSteps; ++step)
         {
             Size offset = (step - 1) * setup.numFactors;
-            Time t = setup.grid[step - 1];
-            Time dt = setup.grid.dt(step - 1);
 
             Array dw(setup.numFactors);
             for (Size f = 0; f < setup.numFactors; ++f)
                 dw[f] = setup.allRandoms[n][offset + f];
 
-            asset = process->evolve(t, asset, dt, dw);
+            // Use pre-computed matrices instead of process->evolve()
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
+                               accrualStart, accrualEnd, stepM[step - 1],
+                               stepSdt[step - 1], stepDt[step - 1], dw);
 
             if (step == setup.exerciseStep)
             {
@@ -447,7 +526,30 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
     }
 
     // ========================================================================
-    // Monte Carlo simulation
+    // Pre-compute matrices for each step (computed once, not per path!)
+    // ========================================================================
+    std::vector<Matrix> stepDiff(setup.fullGridSteps);
+    std::vector<Matrix> stepCov(setup.fullGridSteps);
+    std::vector<Size> stepM(setup.fullGridSteps);
+    std::vector<Real> stepDt(setup.fullGridSteps);
+    std::vector<Real> stepSdt(setup.fullGridSteps);
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Time t0 = setup.grid[step - 1];
+        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
+        stepM[step - 1] = process->nextIndexReset(t0);
+        stepDt[step - 1] = setup.grid.dt(step - 1);
+        stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
+    }
+
+    // Get accrual times from process
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+
+    // ========================================================================
+    // Monte Carlo simulation (now uses pre-computed matrices)
     // ========================================================================
     RealType price = RealType(0.0);
     for (Size n = 0; n < nrTrails; ++n)
@@ -460,14 +562,15 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
         for (Size step = 1; step <= setup.fullGridSteps; ++step)
         {
             Size offset = (step - 1) * setup.numFactors;
-            Time t = setup.grid[step - 1];
-            Time dt = setup.grid.dt(step - 1);
 
             Array dw(setup.numFactors);
             for (Size f = 0; f < setup.numFactors; ++f)
                 dw[f] = setup.allRandoms[n][offset + f];
 
-            asset = process->evolve(t, asset, dt, dw);
+            // Use pre-computed matrices instead of process->evolve()
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
+                               accrualStart, accrualEnd, stepM[step - 1],
+                               stepSdt[step - 1], stepDt[step - 1], dw);
 
             if (step == setup.exerciseStep)
             {
