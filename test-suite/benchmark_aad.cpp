@@ -748,7 +748,7 @@ inline LMMStepData precomputeLMMStepData(
         data.diff[step - 1] = process->covarParam()->diffusion(t0, Array());
         data.covariance[step - 1] = process->covarParam()->covariance(t0, Array());
         data.m[step - 1] = process->nextIndexReset(t0);
-        data.dt[step - 1] = setup.grid.dt(step - 1);
+        data.dt[step - 1] = value(setup.grid.dt(step - 1));
         data.sdt[step - 1] = std::sqrt(data.dt[step - 1]);
     }
 
