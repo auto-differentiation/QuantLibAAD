@@ -6,7 +6,7 @@
  *  This executable is compiled WITHOUT XAD to ensure fair FD comparison.
  *
  *  Usage:
- *    ./benchmark_fd [--lite|--lite-extended|--production|--all] [--quick]
+ *    ./benchmark_fd [--production|--cva|--all] [--quick]
  *
  *  Output format is designed to be parsed and combined with AAD results.
  *
@@ -208,6 +208,173 @@ inline std::vector<TimingResult> runFDBenchmarkDualCurve(const BenchmarkConfig& 
 }
 
 // ============================================================================
+// FD Benchmark Runner for CVA (90 inputs)
+// ============================================================================
+
+std::vector<TimingResult> runFDBenchmarkCVA(const BenchmarkConfig& config, bool quickMode,
+                                             ValidationResult* validation = nullptr)
+{
+    std::vector<TimingResult> results;
+
+    // Setup LMM (pre-compute grid, randoms, etc.)
+    LMMSetup setup(config);
+
+    std::cout << "================================================================================\n";
+    std::cout << "  RUNNING FD BENCHMARKS (CVA - 90 inputs)\n";
+    std::cout << "================================================================================\n";
+    std::cout << "\n";
+
+    const int maxFDPaths = config.getMaxFDPaths();
+
+    for (size_t tc = 0; tc < config.pathCounts.size(); ++tc)
+    {
+        int paths = config.pathCounts[tc];
+        Size nrTrails = static_cast<Size>(paths);
+
+        TimingResult result;
+        result.pathCount = paths;
+
+        // Only run FD for small path counts
+        if (paths > maxFDPaths)
+        {
+            std::cout << "  [" << (tc + 1) << "/" << config.pathCounts.size() << "] "
+                      << formatPathCount(paths) << " paths - SKIPPED (paths > " << maxFDPaths << ")\n";
+            results.push_back(result);
+            continue;
+        }
+
+        std::cout << "  [" << (tc + 1) << "/" << config.pathCounts.size() << "] "
+                  << formatPathCount(paths) << " paths (" << config.numMarketQuotes() << " sensitivities) " << std::flush;
+
+        std::vector<double> fd_times;
+        double eps = 1e-5;
+
+        // For high path counts, skip warmup and run once (FD is expensive)
+        size_t warmup, bench;
+        if (paths >= 10000) {
+            warmup = 0;
+            bench = 1;
+        } else {
+            warmup = quickMode ? 1 : config.warmupIterations;
+            bench = quickMode ? 2 : config.benchmarkIterations;
+        }
+
+        for (size_t iter = 0; iter < warmup + bench; ++iter)
+        {
+            auto t_start = Clock::now();
+
+            // Base rates as plain double
+            std::vector<double> baseDepo(config.depoRates.begin(), config.depoRates.end());
+            std::vector<double> baseSwap(config.swapRates.begin(), config.swapRates.end());
+            std::vector<double> baseOisDepo(config.oisDepoRates.begin(), config.oisDepoRates.end());
+            std::vector<double> baseOisSwap(config.oisSwapRates.begin(), config.oisSwapRates.end());
+            std::vector<double> baseCounterpartyCds(config.counterpartyCdsSpreads.begin(), config.counterpartyCdsSpreads.end());
+            std::vector<double> baseOwnCds(config.ownCdsSpreads.begin(), config.ownCdsSpreads.end());
+
+            // Compute base price
+            double basePrice = priceSwaptionWithCVA<double>(
+                config, setup, baseDepo, baseSwap, baseOisDepo, baseOisSwap,
+                baseCounterpartyCds, baseOwnCds, nrTrails);
+
+            // Compute FD sensitivities (bump each rate)
+            std::vector<double> derivatives(config.numMarketQuotes());
+            Size q = 0;
+
+            // Bump forecasting curve deposits
+            for (Size idx = 0; idx < config.numDeposits; ++idx, ++q)
+            {
+                std::vector<double> bumpedDepo = baseDepo;
+                bumpedDepo[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, bumpedDepo, baseSwap, baseOisDepo, baseOisSwap,
+                    baseCounterpartyCds, baseOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump forecasting curve swaps
+            for (Size idx = 0; idx < config.numSwaps; ++idx, ++q)
+            {
+                std::vector<double> bumpedSwap = baseSwap;
+                bumpedSwap[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, baseDepo, bumpedSwap, baseOisDepo, baseOisSwap,
+                    baseCounterpartyCds, baseOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump discounting curve (OIS) deposits
+            for (Size idx = 0; idx < config.numOisDeposits; ++idx, ++q)
+            {
+                std::vector<double> bumpedOisDepo = baseOisDepo;
+                bumpedOisDepo[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, baseDepo, baseSwap, bumpedOisDepo, baseOisSwap,
+                    baseCounterpartyCds, baseOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump discounting curve (OIS) swaps
+            for (Size idx = 0; idx < config.numOisSwaps; ++idx, ++q)
+            {
+                std::vector<double> bumpedOisSwap = baseOisSwap;
+                bumpedOisSwap[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, baseDepo, baseSwap, baseOisDepo, bumpedOisSwap,
+                    baseCounterpartyCds, baseOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump counterparty CDS spreads
+            for (Size idx = 0; idx < config.numCounterpartyCds; ++idx, ++q)
+            {
+                std::vector<double> bumpedCounterpartyCds = baseCounterpartyCds;
+                bumpedCounterpartyCds[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, baseDepo, baseSwap, baseOisDepo, baseOisSwap,
+                    bumpedCounterpartyCds, baseOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            // Bump own CDS spreads
+            for (Size idx = 0; idx < config.numOwnCds; ++idx, ++q)
+            {
+                std::vector<double> bumpedOwnCds = baseOwnCds;
+                bumpedOwnCds[idx] += eps;
+                double bumpedPrice = priceSwaptionWithCVA<double>(
+                    config, setup, baseDepo, baseSwap, baseOisDepo, baseOisSwap,
+                    baseCounterpartyCds, bumpedOwnCds, nrTrails);
+                derivatives[q] = (bumpedPrice - basePrice) / eps;
+            }
+
+            auto t_end = Clock::now();
+
+            if (iter >= warmup)
+            {
+                fd_times.push_back(DurationMs(t_end - t_start).count());
+            }
+
+            // Capture validation data on first iteration at VALIDATION_PATH_COUNT
+            if (validation && paths == VALIDATION_PATH_COUNT && iter == 0)
+            {
+                *validation = ValidationResult("FD", basePrice, derivatives);
+            }
+        }
+
+        result.fd_mean = computeMean(fd_times);
+        result.fd_std = computeStddev(fd_times);
+        result.fd_enabled = true;
+
+        std::cout << "done (" << std::fixed << std::setprecision(1)
+                  << result.fd_mean << " ms)\n";
+
+        results.push_back(result);
+    }
+
+    std::cout << "\n";
+    return results;
+}
+
+// ============================================================================
 // Output Results in Machine-Parseable Format
 // ============================================================================
 
@@ -232,35 +399,28 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
 
 int main(int argc, char* argv[])
 {
-    bool runLite = false;
-    bool runLiteExtended = false;
     bool runProduction = false;
-    bool runAll = true;  // Default: run lite and lite-extended (not production)
+    bool runCVA = false;
+    bool runAll = true;  // Default: run both production and CVA
     bool quickMode = false;
 
     // Parse arguments
     for (int i = 1; i < argc; ++i)
     {
-        if (strcmp(argv[i], "--lite") == 0)
-        {
-            runLite = true;
-            runAll = false;
-        }
-        else if (strcmp(argv[i], "--lite-extended") == 0)
-        {
-            runLiteExtended = true;
-            runAll = false;
-        }
-        else if (strcmp(argv[i], "--production") == 0)
+        if (strcmp(argv[i], "--production") == 0)
         {
             runProduction = true;
+            runAll = false;
+        }
+        else if (strcmp(argv[i], "--cva") == 0)
+        {
+            runCVA = true;
             runAll = false;
         }
         else if (strcmp(argv[i], "--all") == 0)
         {
-            runLite = true;
-            runLiteExtended = true;
             runProduction = true;
+            runCVA = true;
             runAll = false;
         }
         else if (strcmp(argv[i], "--quick") == 0)
@@ -271,59 +431,28 @@ int main(int argc, char* argv[])
         {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
-            std::cout << "  --lite           Run lite benchmark (1Y into 1Y, 9 sensitivities)\n";
-            std::cout << "  --lite-extended  Run lite-extended benchmark (5Y into 5Y, 14 sensitivities)\n";
-            std::cout << "  --production     Run production benchmark (5Y into 5Y dual-curve, 47 sensitivities)\n";
-            std::cout << "  --all            Run all benchmarks including production\n";
+            std::cout << "  --production     Run production benchmark (5Y into 5Y dual-curve, 45 sensitivities)\n";
+            std::cout << "  --cva            Run CVA benchmark (5Y into 5Y dual-curve + credit, 90 sensitivities)\n";
+            std::cout << "  --all            Run all benchmarks (production + CVA)\n";
             std::cout << "  --quick          Quick mode (fewer iterations)\n";
             std::cout << "  --help           Show this message\n";
             std::cout << "\n";
-            std::cout << "Default: runs lite and lite-extended (not production, as FD is slow with 47 inputs)\n";
+            std::cout << "Default: runs both production and CVA benchmarks\n";
             return 0;
         }
     }
 
-    // Default behavior: run lite and lite-extended
+    // Default behavior: run both production and CVA
     if (runAll)
     {
-        runLite = true;
-        runLiteExtended = true;
-        runProduction = false;  // Production FD is very slow, opt-in only
+        runProduction = true;
+        runCVA = true;
     }
 
     printHeader();
     printEnvironment();
 
     int benchmarkNum = 1;
-
-    if (runLite)
-    {
-        BenchmarkConfig liteConfig;
-        printBenchmarkHeader(liteConfig, benchmarkNum++);
-
-        ValidationResult validation;
-        auto results = runFDBenchmark(liteConfig, quickMode, &validation);
-        printResultsTable(results);
-        printResultsFooter(liteConfig);
-        outputResultsForParsing(results, liteConfig.configId);
-        if (!validation.sensitivities.empty())
-            outputValidationData(validation, liteConfig.configId);
-    }
-
-    if (runLiteExtended)
-    {
-        BenchmarkConfig liteExtConfig;
-        liteExtConfig.setLiteExtendedConfig();
-        printBenchmarkHeader(liteExtConfig, benchmarkNum++);
-
-        ValidationResult validation;
-        auto results = runFDBenchmark(liteExtConfig, quickMode, &validation);
-        printResultsTable(results);
-        printResultsFooter(liteExtConfig);
-        outputResultsForParsing(results, liteExtConfig.configId);
-        if (!validation.sensitivities.empty())
-            outputValidationData(validation, liteExtConfig.configId);
-    }
 
     if (runProduction)
     {
@@ -338,6 +467,21 @@ int main(int argc, char* argv[])
         outputResultsForParsing(results, prodConfig.configId);
         if (!validation.sensitivities.empty())
             outputValidationData(validation, prodConfig.configId);
+    }
+
+    if (runCVA)
+    {
+        BenchmarkConfig cvaConfig;
+        cvaConfig.setCVAConfig();
+        printBenchmarkHeader(cvaConfig, benchmarkNum++);
+
+        ValidationResult validation;
+        auto results = runFDBenchmarkCVA(cvaConfig, quickMode, &validation);
+        printResultsTable(results);
+        printResultsFooter(cvaConfig);
+        outputResultsForParsing(results, cvaConfig.configId);
+        if (!validation.sensitivities.empty())
+            outputValidationData(validation, cvaConfig.configId);
     }
 
     printFooter();

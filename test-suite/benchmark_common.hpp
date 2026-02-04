@@ -25,6 +25,7 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace benchmark {
@@ -83,6 +84,17 @@ struct BenchmarkConfig
     std::vector<double> oisDepoRates;
     std::vector<double> oisSwapRates;
 
+    // Credit curves (CVA) - only used when useCVA=true
+    bool useCVA = false;
+    Size numCounterpartyCds = 0;
+    Size numOwnCds = 0;
+    std::vector<Period> counterpartyCdsTenors;
+    std::vector<Period> ownCdsTenors;
+    std::vector<double> counterpartyCdsSpreads;
+    std::vector<double> ownCdsSpreads;
+    Real counterpartyRecovery = 0.4;  // Fixed, not an input
+    Real ownRecovery = 0.4;           // Fixed, not an input
+
     // LMM parameters
     Size size = 10;       // Number of forward rates
     Size i_opt = 2;       // Option exercise index
@@ -109,34 +121,10 @@ struct BenchmarkConfig
         swapTenors = {1 * Years, 2 * Years, 3 * Years, 4 * Years, 5 * Years};
         depoRates = {0.0350, 0.0365, 0.0380, 0.0400};
         swapRates = {0.0420, 0.0480, 0.0520, 0.0550, 0.0575};
-        pathCounts = {10, 100, 1000, 10000, 100000};
+        pathCounts = {1000, 10000, 100000};  // Testing: 1k and 10k paths
     }
 
-    // Lite-Extended config (5Y into 5Y, single curve, 14 sensitivities)
-    void setLiteExtendedConfig()
-    {
-        numDeposits = 4;
-        numSwaps = 10;
-        depoTenors = {1 * Days, 1 * Months, 3 * Months, 6 * Months};
-        swapTenors = {1 * Years, 2 * Years, 3 * Years, 4 * Years, 5 * Years,
-                      6 * Years, 7 * Years, 8 * Years, 9 * Years, 10 * Years};
-        depoRates = {0.0320, 0.0335, 0.0355, 0.0375};
-        swapRates = {0.0400, 0.0435, 0.0460, 0.0480, 0.0495,
-                     0.0505, 0.0515, 0.0522, 0.0528, 0.0532};
-
-        size = 20;
-        i_opt = 10;
-        j_opt = 10;
-        steps = 20;
-
-        curveEndYears = 12;
-
-        instrumentDesc = "European swaption (5Y into 5Y)";
-        benchmarkName = "Lite-Extended";
-        configId = "LITEEXT";
-    }
-
-    // Production config (5Y into 5Y, dual curve, ~47 sensitivities)
+    // Production config (5Y into 5Y, dual curve, ~45 sensitivities)
     // Uses separate forecasting (Euribor) and discounting (OIS) curves
     // This represents a realistic post-2008 multi-curve setup
     void setProductionConfig()
@@ -183,7 +171,7 @@ struct BenchmarkConfig
         curveEndYears = 22;  // Extended for 20Y swap tenors
 
         // Full path counts including 100K for production
-        pathCounts = {10, 100, 1000, 10000, 100000};
+        pathCounts = {1000, 10000, 100000};  // Testing: 1k and 10k paths
 
         instrumentDesc = "European swaption (5Y into 5Y, dual-curve)";
         benchmarkName = "Production";
@@ -192,9 +180,62 @@ struct BenchmarkConfig
 
     Size numForecastingQuotes() const { return numDeposits + numSwaps; }
     Size numDiscountingQuotes() const { return numOisDeposits + numOisSwaps; }
-    Size numMarketQuotes() const { return numForecastingQuotes() + numDiscountingQuotes(); }
+    Size numCreditQuotes() const { return numCounterpartyCds + numOwnCds; }
+    Size numMarketQuotes() const { return numForecastingQuotes() + numDiscountingQuotes() + numCreditQuotes(); }
 
     int getMaxFDPaths() const { return useDualCurve ? FD_MAX_PATHS_PRODUCTION : FD_MAX_PATHS; }
+
+    // CVA config (5Y into 5Y, dual curve + credit, 90 sensitivities)
+    // Extends production config with credit curve inputs for CVA calculation
+    void setCVAConfig()
+    {
+        // Start with production config (45 market quotes)
+        setProductionConfig();
+
+        // Enable CVA
+        useCVA = true;
+
+        // Counterparty CDS spreads (22 tenors - standard market tenors)
+        numCounterpartyCds = 22;
+        counterpartyCdsTenors = {
+            6 * Months, 1 * Years, 2 * Years, 3 * Years, 4 * Years, 5 * Years,
+            6 * Years, 7 * Years, 8 * Years, 9 * Years, 10 * Years,
+            12 * Years, 15 * Years, 20 * Years, 25 * Years, 30 * Years,
+            35 * Years, 40 * Years, 45 * Years, 50 * Years, 60 * Years, 70 * Years
+        };
+        // Typical investment-grade CDS spreads (in basis points, converted to decimal)
+        counterpartyCdsSpreads = {
+            0.0015, 0.0020, 0.0030, 0.0040, 0.0048, 0.0055,  // 6M-5Y
+            0.0060, 0.0064, 0.0067, 0.0070, 0.0072,           // 6Y-10Y
+            0.0075, 0.0078, 0.0080, 0.0081, 0.0082,           // 12Y-30Y
+            0.0082, 0.0083, 0.0083, 0.0084, 0.0084, 0.0085    // 35Y-70Y
+        };
+
+        // Own CDS spreads (23 tenors - same as counterparty + one extra)
+        numOwnCds = 23;
+        ownCdsTenors = {
+            6 * Months, 1 * Years, 2 * Years, 3 * Years, 4 * Years, 5 * Years,
+            6 * Years, 7 * Years, 8 * Years, 9 * Years, 10 * Years,
+            12 * Years, 15 * Years, 20 * Years, 25 * Years, 30 * Years,
+            35 * Years, 40 * Years, 45 * Years, 50 * Years, 55 * Years, 60 * Years, 70 * Years
+        };
+        // Own credit typically slightly tighter than counterparty
+        ownCdsSpreads = {
+            0.0012, 0.0016, 0.0024, 0.0032, 0.0038, 0.0044,  // 6M-5Y
+            0.0048, 0.0051, 0.0054, 0.0056, 0.0058,           // 6Y-10Y
+            0.0060, 0.0062, 0.0064, 0.0065, 0.0066,           // 12Y-30Y
+            0.0066, 0.0067, 0.0067, 0.0068, 0.0068, 0.0068, 0.0069  // 35Y-70Y
+        };
+
+        // Recovery rates (fixed, not inputs)
+        counterpartyRecovery = 0.4;
+        ownRecovery = 0.4;
+
+        // Total: 45 (production) + 22 (counterparty CDS) + 23 (own CDS) = 90 sensitivities
+        instrumentDesc = "European swaption (5Y into 5Y, dual-curve + CVA)";
+        benchmarkName = "CVA";
+        configId = "CVA";
+    }
 };
 
 // ============================================================================
@@ -204,12 +245,14 @@ struct BenchmarkConfig
 struct TimingResult
 {
     int pathCount = 0;
-    double fd_mean = 0, fd_std = 0;           // Finite differences (bump-and-revalue)
+    double fd_mean = 0, fd_std = 0;           // Finite differences (bump-and-revalue) with double
+    double fd_areal_mean = 0, fd_areal_std = 0; // Finite differences with AReal (no tape, measures type overhead)
     double xad_mean = 0, xad_std = 0;         // XAD tape-based AAD
     double xad_split_mean = 0, xad_split_std = 0; // XAD-Split (Jacobian + tape MC on intermediates + chain rule)
     double jit_mean = 0, jit_std = 0;         // Forge JIT scalar
     double jit_avx_mean = 0, jit_avx_std = 0; // Forge JIT AVX2
     bool fd_enabled = false;                  // Whether FD was run for this path count
+    bool fd_areal_enabled = false;            // Whether FD-AReal was run
     bool xad_enabled = false;
     bool xad_split_enabled = false;
     bool jit_enabled = false;
@@ -263,6 +306,110 @@ inline void outputValidationData(const ValidationResult& result, const std::stri
     std::cout << std::endl;
 }
 
+// Compare sensitivities across methods and print a validation table
+// Mirrors the validation table produced by the GitHub CI workflow
+inline void printValidationComparison(
+    const std::string& configName,
+    const std::vector<ValidationResult*>& results)
+{
+    // Filter to non-empty results
+    std::vector<const ValidationResult*> valid;
+    for (auto* r : results)
+        if (r && !r->sensitivities.empty())
+            valid.push_back(r);
+
+    if (valid.empty()) return;
+
+    // Find FD and XAD as reference methods
+    const ValidationResult* fdRef = nullptr;
+    const ValidationResult* xadRef = nullptr;
+    for (auto* r : valid)
+    {
+        if (r->method == "FD") fdRef = r;
+        if (r->method == "XAD") xadRef = r;
+    }
+
+    auto compareSens = [](const std::vector<double>& a, const std::vector<double>& b,
+                          double tolPct) -> std::tuple<int, int, double>
+    {
+        if (a.size() != b.size())
+            return {0, static_cast<int>(std::max(a.size(), b.size())), 999.0};
+        int matching = 0;
+        double maxDiff = 0.0;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            if (std::abs(a[i]) < 1e-12 && std::abs(b[i]) < 1e-12) { matching++; continue; }
+            double base = std::max(std::abs(a[i]), std::abs(b[i]));
+            double rel = base > 1e-12 ? std::abs(a[i] - b[i]) / base * 100.0 : 0.0;
+            maxDiff = std::max(maxDiff, rel);
+            if (rel <= tolPct) matching++;
+        }
+        return {matching, static_cast<int>(a.size()), maxDiff};
+    };
+
+    // Display names
+    auto displayName = [](const std::string& m) -> std::string {
+        if (m == "FDAREAL") return "FD-AReal";
+        if (m == "XADSPLIT") return "XAD-Split";
+        if (m == "JITAVX") return "Forge-AVX2";
+        if (m == "JIT") return "Forge";
+        return m;
+    };
+
+    std::string pathStr = VALIDATION_PATH_COUNT >= 1000
+        ? std::to_string(VALIDATION_PATH_COUNT / 1000) + "K"
+        : std::to_string(VALIDATION_PATH_COUNT);
+    std::cout << "\n  VALIDATION (" << configName << ", at " << pathStr << " paths)\n";
+    std::cout << "  --------------------------------------------------------------------------\n";
+    std::cout << "  " << std::left << std::setw(10) << "Method"
+              << std::right << std::setw(14) << "PV"
+              << std::setw(6) << "Sens"
+              << std::setw(8) << "vs FD"
+              << std::setw(12) << "FD MaxDiff"
+              << std::setw(8) << "vs XAD"
+              << std::setw(12) << "XAD MaxDiff"
+              << "\n";
+    std::cout << "  --------------------------------------------------------------------------\n";
+
+    // Method order
+    std::vector<std::string> order = {"FD", "FDAREAL", "XAD", "XADSPLIT", "JIT", "JITAVX"};
+    for (const auto& m : order)
+    {
+        const ValidationResult* r = nullptr;
+        for (auto* v : valid)
+            if (v->method == m) r = v;
+        if (!r) continue;
+
+        std::string vsFd = "-", fdMaxDiff = "-";
+        std::string vsXad = "-", xadMaxDiff = "-";
+
+        if (m != "FD" && fdRef)
+        {
+            auto [match, total, maxd] = compareSens(r->sensitivities, fdRef->sensitivities, 1.0);
+            vsFd = std::to_string(match) + "/" + std::to_string(total);
+            std::ostringstream oss; oss << std::fixed << std::setprecision(2) << maxd << "%";
+            fdMaxDiff = oss.str();
+        }
+        if (m != "FD" && m != "XAD" && xadRef)
+        {
+            auto [match, total, maxd] = compareSens(r->sensitivities, xadRef->sensitivities, 0.01);
+            vsXad = std::to_string(match) + "/" + std::to_string(total);
+            std::ostringstream oss; oss << std::fixed << std::setprecision(4) << maxd << "%";
+            xadMaxDiff = oss.str();
+        }
+
+        std::cout << "  " << std::left << std::setw(10) << displayName(m)
+                  << std::right << std::fixed << std::setprecision(6) << std::setw(14) << r->pv
+                  << std::setw(6) << r->sensitivities.size()
+                  << std::setw(8) << vsFd
+                  << std::setw(12) << fdMaxDiff
+                  << std::setw(8) << vsXad
+                  << std::setw(12) << xadMaxDiff
+                  << "\n";
+    }
+    std::cout << "\n";
+}
+
 // ============================================================================
 // Output Formatting
 // ============================================================================
@@ -314,6 +461,11 @@ inline void printBenchmarkHeader(const BenchmarkConfig& config, int benchmarkNum
                   << config.numDeposits << " deposits + " << config.numSwaps << " swaps)\n";
         std::cout << "  Discounting:  " << config.numDiscountingQuotes() << " quotes ("
                   << config.numOisDeposits << " OIS deposits + " << config.numOisSwaps << " OIS swaps)\n";
+        if (config.useCVA)
+        {
+            std::cout << "  Credit:       " << config.numCreditQuotes() << " CDS spreads ("
+                      << config.numCounterpartyCds << " counterparty + " << config.numOwnCds << " own)\n";
+        }
         std::cout << "  Total inputs: " << config.numMarketQuotes() << " market quotes\n";
     }
     else
@@ -339,6 +491,7 @@ inline void printBenchmarkHeader(const BenchmarkConfig& config, int benchmarkNum
     std::cout << "  METHODS\n";
     std::cout << "--------------------------------------------------------------------------------\n";
     std::cout << "  FD        Finite Differences (bump-and-revalue, paths <= " << FD_MAX_PATHS << " only)\n";
+    std::cout << "  FD-AReal  Finite Differences with AReal type (measures AReal overhead, no AAD)\n";
     std::cout << "  XAD       XAD tape-based reverse-mode AAD\n";
     std::cout << "  XAD-Split XAD with decoupled Jacobian + chain rule (no JIT)\n";
     std::cout << "  JIT       Forge JIT-compiled native code\n";
@@ -432,6 +585,7 @@ inline void printResultsTable(const std::vector<TimingResult>& results)
         };
 
         printRow("FD", r.fd_mean, r.fd_std, r.fd_enabled);
+        printRow("FD-AReal", r.fd_areal_mean, r.fd_areal_std, r.fd_areal_enabled);
         printRow("XAD", r.xad_mean, r.xad_std, r.xad_enabled);
         printRow("XAD-Split", r.xad_split_mean, r.xad_split_std, r.xad_split_enabled, r.xad_split_fixed_mean, true);
         printRow("JIT", r.jit_mean, r.jit_std, r.jit_enabled, r.jit_fixed_mean, true);

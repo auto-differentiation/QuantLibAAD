@@ -6,7 +6,7 @@
  *  This executable is compiled WITH XAD (and optionally Forge).
  *
  *  Usage:
- *    ./benchmark_aad [--lite|--lite-extended|--production|--all] [--quick] [--xad-only]
+ *    ./benchmark_aad [--production|--cva|--all] [--quick] [--xad-only]
  *
  *  Output format is designed to be parsed and combined with FD results.
  *
@@ -470,6 +470,231 @@ CurveSetupResult buildDualCurveAndJacobian(
     return result;
 }
 
+// Phase 1 for CVA: Build all curves (forecasting, discounting, credit), extract intermediates, compute Jacobian
+// Intermediates: forward rates + swap rate + OIS discounts + counterpartySurvival + ownSurvival
+CurveSetupResult buildCVACurveAndJacobian(
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    tape_type& tape)
+{
+    CurveSetupResult result;
+    result.numMarketQuotes = config.numMarketQuotes();
+    // Intermediates: forward rates + swap rate + OIS discount factors + 2 survival probabilities
+    // = size + 1 + size + 2 = 2*size + 3
+    result.numIntermediates = config.size + 1 + config.size + 2;
+
+    // Register forecasting curve inputs
+    std::vector<RealAD> depositRates(config.numDeposits);
+    std::vector<RealAD> swapRatesAD(config.numSwaps);
+    for (Size idx = 0; idx < config.numDeposits; ++idx)
+        depositRates[idx] = config.depoRates[idx];
+    for (Size idx = 0; idx < config.numSwaps; ++idx)
+        swapRatesAD[idx] = config.swapRates[idx];
+
+    // Register discounting curve inputs (OIS)
+    std::vector<RealAD> oisDepoRates(config.numOisDeposits);
+    std::vector<RealAD> oisSwapRatesAD(config.numOisSwaps);
+    for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+        oisDepoRates[idx] = config.oisDepoRates[idx];
+    for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+        oisSwapRatesAD[idx] = config.oisSwapRates[idx];
+
+    // Register credit curve inputs (CDS spreads)
+    std::vector<RealAD> counterpartyCdsSpreadsAD(config.numCounterpartyCds);
+    std::vector<RealAD> ownCdsSpreadsAD(config.numOwnCds);
+    for (Size idx = 0; idx < config.numCounterpartyCds; ++idx)
+        counterpartyCdsSpreadsAD[idx] = config.counterpartyCdsSpreads[idx];
+    for (Size idx = 0; idx < config.numOwnCds; ++idx)
+        ownCdsSpreadsAD[idx] = config.ownCdsSpreads[idx];
+
+    tape.registerInputs(depositRates);
+    tape.registerInputs(swapRatesAD);
+    tape.registerInputs(oisDepoRates);
+    tape.registerInputs(oisSwapRatesAD);
+    tape.registerInputs(counterpartyCdsSpreadsAD);
+    tape.registerInputs(ownCdsSpreadsAD);
+    tape.newRecording();
+
+    // Build FORECASTING curve (Euribor deposits + swaps)
+    RelinkableHandle<YieldTermStructure> euriborTS;
+    auto euribor6m = ext::make_shared<Euribor6M>(euriborTS);
+    euribor6m->addFixing(Date(2, September, 2005), 0.04);
+
+    std::vector<ext::shared_ptr<RateHelper>> forecastingInstruments;
+    for (Size idx = 0; idx < config.numDeposits; ++idx)
+    {
+        auto depoQuote = ext::make_shared<SimpleQuote>(depositRates[idx]);
+        forecastingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+            Handle<Quote>(depoQuote), config.depoTenors[idx], setup.fixingDays,
+            setup.calendar, ModifiedFollowing, true, setup.dayCounter));
+    }
+    for (Size idx = 0; idx < config.numSwaps; ++idx)
+    {
+        auto swapQuote = ext::make_shared<SimpleQuote>(swapRatesAD[idx]);
+        forecastingInstruments.push_back(ext::make_shared<SwapRateHelper>(
+            Handle<Quote>(swapQuote), config.swapTenors[idx],
+            setup.calendar, Annual, Unadjusted, Thirty360(Thirty360::BondBasis),
+            euribor6m));
+    }
+
+    auto forecastingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+        setup.settlementDate, forecastingInstruments, setup.dayCounter);
+    forecastingCurve->enableExtrapolation();
+    euriborTS.linkTo(forecastingCurve);
+
+    // Build DISCOUNTING curve (OIS deposits + swaps)
+    RelinkableHandle<YieldTermStructure> oisTS;
+    auto eonia = ext::make_shared<Eonia>(oisTS);
+
+    std::vector<ext::shared_ptr<RateHelper>> discountingInstruments;
+    for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+    {
+        auto oisDepoQuote = ext::make_shared<SimpleQuote>(oisDepoRates[idx]);
+        discountingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+            Handle<Quote>(oisDepoQuote), config.oisDepoTenors[idx], setup.fixingDays,
+            setup.calendar, ModifiedFollowing, true, Actual360()));
+    }
+    for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+    {
+        auto oisSwapQuote = ext::make_shared<SimpleQuote>(oisSwapRatesAD[idx]);
+        discountingInstruments.push_back(ext::make_shared<OISRateHelper>(
+            2, config.oisSwapTenors[idx], Handle<Quote>(oisSwapQuote), eonia));
+    }
+
+    auto discountingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+        setup.settlementDate, discountingInstruments, setup.dayCounter);
+    discountingCurve->enableExtrapolation();
+    oisTS.linkTo(discountingCurve);
+
+    // Build COUNTERPARTY CREDIT curve (CDS spreads -> hazard rates)
+    std::vector<ext::shared_ptr<DefaultProbabilityHelper>> counterpartyHelpers;
+    for (Size idx = 0; idx < config.numCounterpartyCds; ++idx)
+    {
+        auto cdsQuote = ext::make_shared<SimpleQuote>(counterpartyCdsSpreadsAD[idx]);
+        counterpartyHelpers.push_back(ext::make_shared<SpreadCdsHelper>(
+            Handle<Quote>(cdsQuote), config.counterpartyCdsTenors[idx],
+            0, setup.calendar, Quarterly, ModifiedFollowing,
+            DateGeneration::CDS2015, setup.dayCounter,
+            config.counterpartyRecovery, Handle<YieldTermStructure>(discountingCurve)));
+    }
+
+    auto counterpartyCreditCurve = ext::make_shared<PiecewiseDefaultCurve<HazardRate, BackwardFlat>>(
+        setup.settlementDate, counterpartyHelpers, setup.dayCounter);
+    counterpartyCreditCurve->enableExtrapolation();
+
+    // Build OWN CREDIT curve (CDS spreads -> hazard rates)
+    std::vector<ext::shared_ptr<DefaultProbabilityHelper>> ownHelpers;
+    for (Size idx = 0; idx < config.numOwnCds; ++idx)
+    {
+        auto cdsQuote = ext::make_shared<SimpleQuote>(ownCdsSpreadsAD[idx]);
+        ownHelpers.push_back(ext::make_shared<SpreadCdsHelper>(
+            Handle<Quote>(cdsQuote), config.ownCdsTenors[idx],
+            0, setup.calendar, Quarterly, ModifiedFollowing,
+            DateGeneration::CDS2015, setup.dayCounter,
+            config.ownRecovery, Handle<YieldTermStructure>(discountingCurve)));
+    }
+
+    auto ownCreditCurve = ext::make_shared<PiecewiseDefaultCurve<HazardRate, BackwardFlat>>(
+        setup.settlementDate, ownHelpers, setup.dayCounter);
+    ownCreditCurve->enableExtrapolation();
+
+    // Extract zero rates for LMM from forecasting curve
+    std::vector<Date> curveDates;
+    std::vector<RealAD> zeroRates;
+    curveDates.push_back(setup.settlementDate);
+    zeroRates.push_back(forecastingCurve->zeroRate(setup.settlementDate, setup.dayCounter, Continuous).rate());
+    Date endDate = setup.settlementDate + config.curveEndYears * Years;
+    curveDates.push_back(endDate);
+    zeroRates.push_back(forecastingCurve->zeroRate(endDate, setup.dayCounter, Continuous).rate());
+
+    std::vector<Rate> zeroRates_ql;
+    for (const auto& r : zeroRates) zeroRates_ql.push_back(r);
+
+    // Build LMM process using forecasting curve
+    RelinkableHandle<YieldTermStructure> termStructure;
+    ext::shared_ptr<IborIndex> index(new Euribor6M(termStructure));
+    index->addFixing(Date(2, September, 2005), 0.04);
+    termStructure.linkTo(ext::make_shared<ZeroCurve>(curveDates, zeroRates_ql, setup.dayCounter));
+
+    result.process = ext::make_shared<LiborForwardModelProcess>(config.size, index);
+    result.process->setCovarParam(ext::shared_ptr<LfmCovarianceParameterization>(
+        new LfmCovarianceProxy(
+            ext::make_shared<LmLinearExponentialVolatilityModel>(
+                result.process->fixingTimes(), 0.291, 1.483, 0.116, 0.00001),
+            ext::make_shared<LmExponentialCorrelationModel>(config.size, 0.5))));
+
+    // Get swap rate (using OIS curve for discounting)
+    ext::shared_ptr<VanillaSwap> fwdSwap(
+        new VanillaSwap(Swap::Receiver, 1.0,
+                        setup.schedule, 0.05, setup.dayCounter,
+                        setup.schedule, index, 0.0, index->dayCounter()));
+    fwdSwap->setPricingEngine(ext::make_shared<DiscountingSwapEngine>(
+        Handle<YieldTermStructure>(discountingCurve)));
+    result.swapRate = fwdSwap->fairRate();
+
+    // Extract intermediates:
+    // [0, size-1]: forward rates from LMM process
+    // [size]: swap rate
+    // [size+1, 2*size]: OIS discount factors at accrual end times
+    // [2*size+1]: counterparty survival probability
+    // [2*size+2]: own survival probability
+    result.initRates = result.process->initialValues();
+    result.intermediates.resize(result.numIntermediates);
+
+    // Forward rates
+    for (Size k = 0; k < config.size; ++k)
+        result.intermediates[k] = result.initRates[k];
+
+    // Swap rate
+    result.intermediates[config.size] = result.swapRate;
+
+    // OIS discount factors
+    for (Size k = 0; k < config.size; ++k)
+    {
+        Time t = setup.accrualEnd[k];
+        result.intermediates[config.size + 1 + k] = discountingCurve->discount(t);
+    }
+
+    // Survival probabilities at swaption maturity
+    Time swaptionMaturity = setup.accrualStart[config.i_opt];
+    result.intermediates[2 * config.size + 1] = counterpartyCreditCurve->survivalProbability(swaptionMaturity);
+    result.intermediates[2 * config.size + 2] = ownCreditCurve->survivalProbability(swaptionMaturity);
+
+    // Register intermediates as outputs
+    tape.registerOutputs(result.intermediates);
+
+    // Compute Jacobian via XAD adjoints
+    result.jacobian.resize(result.numIntermediates * result.numMarketQuotes);
+
+    for (Size i = 0; i < result.numIntermediates; ++i)
+    {
+        tape.clearDerivatives();
+        derivative(result.intermediates[i]) = 1.0;
+        tape.computeAdjoints();
+
+        Size col = 0;
+        // Forecasting inputs
+        for (Size j = 0; j < config.numDeposits; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(depositRates[j]);
+        for (Size j = 0; j < config.numSwaps; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(swapRatesAD[j]);
+        // Discounting inputs
+        for (Size j = 0; j < config.numOisDeposits; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(oisDepoRates[j]);
+        for (Size j = 0; j < config.numOisSwaps; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(oisSwapRatesAD[j]);
+        // Credit curve inputs
+        for (Size j = 0; j < config.numCounterpartyCds; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(counterpartyCdsSpreadsAD[j]);
+        for (Size j = 0; j < config.numOwnCds; ++j)
+            result.jacobian[i * result.numMarketQuotes + col++] = derivative(ownCdsSpreadsAD[j]);
+    }
+
+    tape.deactivate();
+
+    return result;
+}
+
 // ============================================================================
 // Shared Payoff Recording - used by both JIT and XAD-Split
 // ============================================================================
@@ -481,6 +706,9 @@ struct PayoffVariables {
     ADType swapRate;
     std::vector<ADType> oisDiscounts;  // Empty for single-curve
     std::vector<ADType> randoms;       // For JIT only; XAD-Split uses plain doubles
+    // CVA-specific fields
+    ADType counterpartySurvival;       // Counterparty survival probability at swaption maturity
+    ADType ownSurvival;                // Own survival probability at swaption maturity
 };
 
 // ============================================================================
@@ -488,15 +716,14 @@ struct PayoffVariables {
 // ============================================================================
 
 struct LMMStepData {
-    std::vector<std::vector<Real>> diff;       // Flattened diffusion matrices per step
-    std::vector<std::vector<Real>> covariance; // Flattened covariance matrices per step
+    std::vector<Matrix> diff;         // Diffusion matrices per step
+    std::vector<Matrix> covariance;   // Covariance matrices per step
     std::vector<Size> m;              // nextIndexReset per step
     std::vector<double> dt;           // Time step per step
     std::vector<double> sdt;          // sqrt(dt) per step
     std::vector<double> tau;          // Accrual periods (constant)
     Size numSteps;
     Size numFactors;
-    Size size;                        // Number of forward rates (for stride calculation)
 };
 
 // Pre-compute step data for LMM evolution (call once before path loop)
@@ -508,7 +735,6 @@ inline LMMStepData precomputeLMMStepData(
     LMMStepData data;
     data.numSteps = setup.fullGridSteps;
     data.numFactors = setup.numFactors;
-    data.size = size;
 
     data.diff.resize(data.numSteps);
     data.covariance.resize(data.numSteps);
@@ -519,23 +745,10 @@ inline LMMStepData precomputeLMMStepData(
     for (Size step = 1; step <= data.numSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        Matrix diff = process->covarParam()->diffusion(t0, Array());
-        Matrix cov = process->covarParam()->covariance(t0, Array());
-        
-        // Flatten diffusion matrix - keep as Real for AD correctness
-        data.diff[step - 1].resize(diff.rows() * diff.columns());
-        for (Size i = 0; i < diff.rows(); ++i)
-            for (Size j = 0; j < diff.columns(); ++j)
-                data.diff[step - 1][i * diff.columns() + j] = diff[i][j];
-
-        // Flatten covariance matrix - keep as Real for AD correctness
-        data.covariance[step - 1].resize(cov.rows() * cov.columns());
-        for (Size i = 0; i < cov.rows(); ++i)
-            for (Size j = 0; j < cov.columns(); ++j)
-                data.covariance[step - 1][i * cov.columns() + j] = cov[i][j];
-
+        data.diff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        data.covariance[step - 1] = process->covarParam()->covariance(t0, Array());
         data.m[step - 1] = process->nextIndexReset(t0);
-        data.dt[step - 1] = value(setup.grid.dt(step - 1));
+        data.dt[step - 1] = setup.grid.dt(step - 1);
         data.sdt[step - 1] = std::sqrt(data.dt[step - 1]);
     }
 
@@ -551,7 +764,7 @@ inline LMMStepData precomputeLMMStepData(
     return data;
 }
 
-// Optimized LMM evolve using pre-computed flattened matrices (for XAD-Split)
+// Optimized LMM evolve using pre-computed matrices (for XAD-Split)
 template <typename ADType, typename RandomsType>
 void evolveLMMWithMatrices(
     std::vector<ADType>& asset,
@@ -565,8 +778,8 @@ void evolveLMMWithMatrices(
     const Size m = stepData.m[stepIndex];
     const ADType sdt = ADType(stepData.sdt[stepIndex]);
     const double dt = stepData.dt[stepIndex];
-    const std::vector<Real>& diff = stepData.diff[stepIndex];
-    const std::vector<Real>& covariance = stepData.covariance[stepIndex];
+    const Matrix& diff = stepData.diff[stepIndex];
+    const Matrix& covariance = stepData.covariance[stepIndex];
     const std::vector<double>& tau = stepData.tau;
 
     // LOCAL arrays for predictor-corrector (no mutable state!)
@@ -584,29 +797,29 @@ void evolveLMMWithMatrices(
         const ADType y = tau[k] * asset[k];
         m1[k] = y / (ADType(1.0) + y);
 
-        // Drift term using m1 (flattened access: covariance[j * size + k])
+        // Drift term using m1
         ADType drift1 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j * size + k];
-        const ADType d = (drift1 - ADType(0.5) * covariance[k * size + k]) * dt;
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
 
-        // Diffusion term (flattened access: diff[k * numFactors + f])
+        // Diffusion term
         ADType r = ADType(0.0);
         for (Size f = 0; f < numFactors; ++f)
-            r = r + diff[k * numFactors + f] * dw[f];
+            r = r + diff[k][f] * dw[f];
         r = r * sdt;
 
         // Corrector step
         const ADType x = y * exp(d + r);
         m2[k] = x / (ADType(1.0) + x);
 
-        // Drift term using m2 (flattened access)
+        // Drift term using m2
         ADType drift2 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j * size + k];
+            drift2 = drift2 + m2[j] * covariance[j][k];
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k * size + k]) * dt) + r);
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
     }
 }
 
@@ -664,10 +877,65 @@ ADType computePathPayoffWithMatrices(
     return npv;
 }
 
+// Compute path payoff with CVA adjustment using pre-computed matrices (for XAD-Split/JIT)
+// This version includes CVA/DVA adjustment using survival probabilities
+template <typename ADType, typename RandomsType>
+ADType computePathPayoffWithMatricesCVA(
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    const LMMStepData& stepData,
+    PayoffVariables<ADType>& vars,
+    const RandomsType& randoms)
+{
+    std::vector<ADType> asset(config.size);
+    std::vector<ADType> assetAtExercise(config.size);
+    for (Size k = 0; k < config.size; ++k)
+        asset[k] = vars.initRates[k];
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Size offset = (step - 1) * setup.numFactors;
+
+        // Use pre-computed matrices
+        evolveLMMWithMatrices(asset, stepData, step - 1, setup.numFactors, randoms, offset);
+
+        if (step == setup.exerciseStep)
+            for (Size k = 0; k < config.size; ++k)
+                assetAtExercise[k] = asset[k];
+    }
+
+    // Use OIS discount factors (dual-curve)
+    std::vector<ADType> dis(config.size);
+    for (Size k = 0; k < config.size; ++k)
+        dis[k] = vars.oisDiscounts[k];
+
+    ADType npv = ADType(0.0);
+    for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
+    {
+        double accrual = setup.accrualEnd[m] - setup.accrualStart[m];
+        npv = npv + (vars.swapRate - assetAtExercise[m]) * accrual * dis[m];
+    }
+
+    // CVA adjustment factor:
+    // CVA = swaptionNPV * (1 - counterpartySurvival) * (1 - counterpartyRecovery)
+    // DVA = swaptionNPV * (1 - ownSurvival) * (1 - ownRecovery)
+    // Adjusted price = swaptionNPV - CVA + DVA
+    // = swaptionNPV * (1 - (1-S_C)*(1-R_C) + (1-S_O)*(1-R_O))
+    // Since recoveries are fixed, we compute:
+    // cvaFactor = 1 - (1-counterpartySurvival)*(1-counterpartyRecovery) + (1-ownSurvival)*(1-ownRecovery)
+    ADType cvaFactor = ADType(1.0)
+        - (ADType(1.0) - vars.counterpartySurvival) * ADType(1.0 - config.counterpartyRecovery)
+        + (ADType(1.0) - vars.ownSurvival) * ADType(1.0 - config.ownRecovery);
+
+    // Return npv (not adjusted by cvaFactor here since cvaFactor is applied after max)
+    // Actually, for correctness: return npv, and cvaFactor will be applied after max(npv, 0)
+    // So we return the raw npv here and apply cva adjustment in the calling code
+    return npv;
+}
+
 // Custom LMM evolve function using LOCAL arrays instead of process's mutable members.
 // This fixes XAD-Split tape recording issues caused by mutable state in process->evolve().
 // Implements the same predictor-corrector scheme as LiborForwardModelProcess::evolve().
-// Matrices are flattened for cache-friendly access.
 template <typename ADType, typename RandomsType>
 void evolveLMM(
     std::vector<ADType>& asset,
@@ -682,20 +950,9 @@ void evolveLMM(
     const Size m = process->nextIndexReset(t0);
     const ADType sdt = ADType(std::sqrt(dt));
 
-    // Get covariance parameters and flatten for cache-friendly access
-    Matrix diffMat = process->covarParam()->diffusion(t0, Array());
-    Matrix covMat = process->covarParam()->covariance(t0, Array());
-    
-    // Flatten matrices - keep as Real for AD correctness
-    std::vector<Real> diff(diffMat.rows() * diffMat.columns());
-    for (Size i = 0; i < diffMat.rows(); ++i)
-        for (Size j = 0; j < diffMat.columns(); ++j)
-            diff[i * diffMat.columns() + j] = diffMat[i][j];
-
-    std::vector<Real> covariance(covMat.rows() * covMat.columns());
-    for (Size i = 0; i < covMat.rows(); ++i)
-        for (Size j = 0; j < covMat.columns(); ++j)
-            covariance[i * covMat.columns() + j] = covMat[i][j];
+    // Get covariance parameters (these are constant, not AD)
+    Matrix diff = process->covarParam()->diffusion(t0, Array());
+    Matrix covariance = process->covarParam()->covariance(t0, Array());
 
     // Get accrual periods (constants, not AD)
     const std::vector<Time>& accrualStart = process->accrualStartTimes();
@@ -721,29 +978,29 @@ void evolveLMM(
         const ADType y = tau[k] * asset[k];
         m1[k] = y / (ADType(1.0) + y);
 
-        // Drift term using m1 (flattened access)
+        // Drift term using m1
         ADType drift1 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j * size + k];
-        const ADType d = (drift1 - ADType(0.5) * covariance[k * size + k]) * dt;
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ADType d = (drift1 - ADType(0.5) * covariance[k][k]) * dt;
 
-        // Diffusion term (flattened access)
+        // Diffusion term
         ADType r = ADType(0.0);
         for (Size f = 0; f < numFactors; ++f)
-            r = r + diff[k * numFactors + f] * dw[f];
+            r = r + diff[k][f] * dw[f];
         r = r * sdt;
 
         // Corrector step
         const ADType x = y * exp(d + r);
         m2[k] = x / (ADType(1.0) + x);
 
-        // Drift term using m2 (flattened access)
+        // Drift term using m2
         ADType drift2 = ADType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j * size + k];
+            drift2 = drift2 + m2[j] * covariance[j][k];
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k * size + k]) * dt) + r);
+        asset[k] = asset[k] * exp(ADType(0.5) * (d + (drift2 - ADType(0.5) * covariance[k][k]) * dt) + r);
     }
 }
 
@@ -1045,7 +1302,6 @@ void recordJITGraph(
     xad::JITCompiler<double>& jit,
     const BenchmarkConfig& config,
     const LMMSetup& setup,
-    const LMMStepData& stepData,
     const CurveSetupResult& curve,
     PayoffVariables<xad::AD>& vars);
 
@@ -1157,14 +1413,11 @@ void runDiagnosticComparison(const BenchmarkConfig& config, const LMMSetup& setu
     // =========================================================================
     // Phase 2b: JIT - compiled kernel MC
     // =========================================================================
-    // Pre-compute LMM step data (matrices computed once, not per path!)
-    LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
-
     auto backend = std::make_unique<xad::forge::ForgeBackend<double>>(false);
     xad::JITCompiler<double> jit(std::move(backend));
 
     PayoffVariables<xad::AD> jit_vars;
-    recordJITGraph<false>(jit, config, setup, stepData, curve, jit_vars);
+    recordJITGraph<false>(jit, config, setup, curve, jit_vars);
     jit.compile();
 
     const auto& graph = jit.getGraph();
@@ -1296,7 +1549,6 @@ void recordJITGraph(
     xad::JITCompiler<double>& jit,
     const BenchmarkConfig& config,
     const LMMSetup& setup,
-    const LMMStepData& stepData,
     const CurveSetupResult& curve,
     PayoffVariables<xad::AD>& vars)
 {
@@ -1330,8 +1582,8 @@ void recordJITGraph(
 
     jit.newRecording();
 
-    // Compute NPV using pre-computed matrices (optimization!)
-    xad::AD npv = computePathPayoffWithMatrices<xad::AD, UseDualCurve>(config, setup, stepData, vars, vars.randoms);
+    // Compute NPV using shared function - pass vars.randoms for JIT graph recording
+    xad::AD npv = computePathPayoff<xad::AD, UseDualCurve>(config, setup, curve.process, vars, vars.randoms);
 
     // Payoff = max(npv, 0) - JIT uses xad::less().If() for JIT compatibility
     xad::AD payoff = xad::less(npv, xad::AD(0.0)).If(xad::AD(0.0), npv);
@@ -1358,15 +1610,12 @@ void runJITBenchmarkImpl(const BenchmarkConfig& config, const LMMSetup& setup,
         tape_type tape;
         CurveSetupResult curve = buildSingleCurveAndJacobian(config, setup, tape);
 
-        // Pre-compute LMM step data (matrices computed once, not per path!)
-        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
-
         // Phase 2: JIT graph recording and compilation
         auto backend = std::make_unique<BackendType>(false);
         xad::JITCompiler<double> jit(std::move(backend));
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<false>(jit, config, setup, stepData, curve, vars);
+        recordJITGraph<false>(jit, config, setup, curve, vars);
 
         // Compile the JIT kernel
         jit.compile();
@@ -1460,14 +1709,11 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         tape_type tape;
         CurveSetupResult curve = buildSingleCurveAndJacobian(config, setup, tape);
 
-        // Pre-compute LMM step data (matrices computed once, not per path!)
-        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
-
         // Phase 2: JIT graph recording (using JITCompiler to record only)
         xad::JITCompiler<double> jit;  // Default interpreter - just for recording
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<false>(jit, config, setup, stepData, curve, vars);
+        recordJITGraph<false>(jit, config, setup, curve, vars);
 
         // Get the JIT graph and deactivate
         const auto& jitGraph = jit.getGraph();
@@ -1601,15 +1847,12 @@ void runJITBenchmarkDualCurveImpl(const BenchmarkConfig& config, const LMMSetup&
 
         auto t_curve_end = Clock::now();
 
-        // Pre-compute LMM step data (matrices computed once, not per path!)
-        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
-
         // Phase 2: JIT graph recording and compilation
         auto backend = std::make_unique<BackendType>(false);
         xad::JITCompiler<double> jit(std::move(backend));
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<true>(jit, config, setup, stepData, curve, vars);
+        recordJITGraph<true>(jit, config, setup, curve, vars);
 
         // Compile the JIT kernel
         jit.compile();
@@ -1728,14 +1971,11 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
 
         auto t_curve_end = Clock::now();
 
-        // Pre-compute LMM step data (matrices computed once, not per path!)
-        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
-
         // Phase 2: JIT graph recording (using JITCompiler without backend)
         xad::JITCompiler<double> jit;  // Default constructor - for recording only
 
         PayoffVariables<xad::AD> vars;
-        recordJITGraph<true>(jit, config, setup, stepData, curve, vars);
+        recordJITGraph<true>(jit, config, setup, curve, vars);
 
         // Get the JIT graph and deactivate
         const auto& jitGraph = jit.getGraph();
@@ -1868,7 +2108,509 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
     phase3_compile_mean = computeMean(phase3_times);
 }
 
+// ============================================================================
+// CVA JIT Graph Recording - records payoff with CVA adjustment
+// ============================================================================
+
+// Record JIT graph for CVA payoff (includes survival probabilities)
+void recordJITGraphCVA(
+    xad::JITCompiler<double>& jit,
+    const BenchmarkConfig& config,
+    const LMMSetup& setup,
+    const CurveSetupResult& curve,
+    PayoffVariables<xad::AD>& vars)
+{
+    vars.initRates.resize(config.size);
+    vars.oisDiscounts.resize(config.size);
+    vars.randoms.resize(setup.fullGridRandoms);
+
+    // Register forward rates
+    for (Size k = 0; k < config.size; ++k)
+    {
+        vars.initRates[k] = xad::AD(value(curve.initRates[k]));
+        jit.registerInput(vars.initRates[k]);
+    }
+
+    // Register swap rate
+    vars.swapRate = xad::AD(value(curve.swapRate));
+    jit.registerInput(vars.swapRate);
+
+    // Register OIS discount factors
+    for (Size k = 0; k < config.size; ++k)
+    {
+        vars.oisDiscounts[k] = xad::AD(value(curve.intermediates[config.size + 1 + k]));
+        jit.registerInput(vars.oisDiscounts[k]);
+    }
+
+    // Register survival probabilities
+    vars.counterpartySurvival = xad::AD(value(curve.intermediates[2 * config.size + 1]));
+    jit.registerInput(vars.counterpartySurvival);
+    vars.ownSurvival = xad::AD(value(curve.intermediates[2 * config.size + 2]));
+    jit.registerInput(vars.ownSurvival);
+
+    // Register randoms
+    for (Size m = 0; m < setup.fullGridRandoms; ++m)
+    {
+        vars.randoms[m] = xad::AD(0.0);
+        jit.registerInput(vars.randoms[m]);
+    }
+
+    jit.newRecording();
+
+    // Compute NPV using CVA path payoff function
+    xad::AD npv = computePathPayoffWithMatricesCVA<xad::AD>(config, setup,
+        precomputeLMMStepData(curve.process, setup, config.size), vars, vars.randoms);
+
+    // Payoff = max(npv, 0)
+    xad::AD payoff = xad::less(npv, xad::AD(0.0)).If(xad::AD(0.0), npv);
+
+    // Apply CVA factor: adjustedPayoff = payoff * cvaFactor
+    // cvaFactor = 1 - (1-S_C)*(1-R_C) + (1-S_O)*(1-R_O)
+    xad::AD cvaFactor = xad::AD(1.0)
+        - (xad::AD(1.0) - vars.counterpartySurvival) * xad::AD(1.0 - config.counterpartyRecovery)
+        + (xad::AD(1.0) - vars.ownSurvival) * xad::AD(1.0 - config.ownRecovery);
+    xad::AD adjustedPayoff = payoff * cvaFactor;
+
+    jit.registerOutput(adjustedPayoff);
+}
+
+// ============================================================================
+// Forge JIT Benchmark (CVA) - Template Implementation
+// ============================================================================
+
+template <typename BackendType>
+void runJITBenchmarkCVAImpl(const BenchmarkConfig& config, const LMMSetup& setup,
+                             Size nrTrails, size_t warmup, size_t bench,
+                             double& mean, double& stddev,
+                             double& phase1_curve_mean, double& phase2_jacobian_mean,
+                             double& phase3_compile_mean,
+                             ValidationResult* validation = nullptr)
+{
+    std::vector<double> times;
+    std::vector<double> phase1_times;
+    std::vector<double> phase2_times;
+    std::vector<double> phase3_times;
+
+    for (size_t iter = 0; iter < warmup + bench; ++iter)
+    {
+        auto t_start = Clock::now();
+
+        // Phase 1: XAD tape - CVA curve bootstrap and Jacobian computation
+        tape_type tape;
+        CurveSetupResult curve = buildCVACurveAndJacobian(config, setup, tape);
+
+        auto t_curve_end = Clock::now();
+
+        // Phase 2: JIT graph recording and compilation
+        auto backend = std::make_unique<BackendType>(false);
+        xad::JITCompiler<double> jit(std::move(backend));
+
+        PayoffVariables<xad::AD> vars;
+        recordJITGraphCVA(jit, config, setup, curve, vars);
+
+        // Compile the JIT kernel
+        jit.compile();
+
+        auto t_compile_end = Clock::now();
+
+        // Phase 3: Execute JIT kernel for all MC paths
+        const auto& graph = jit.getGraph();
+        uint32_t outputSlot = graph.output_ids[0];
+
+        double mcPrice = 0.0;
+        std::vector<double> dPrice_dIntermediates(curve.numIntermediates, 0.0);
+
+        for (Size n = 0; n < nrTrails; ++n)
+        {
+            // Set inputs: forward rates
+            for (Size k = 0; k < config.size; ++k)
+                value(vars.initRates[k]) = value(curve.initRates[k]);
+            // Swap rate
+            value(vars.swapRate) = value(curve.swapRate);
+            // OIS discount factors
+            for (Size k = 0; k < config.size; ++k)
+                value(vars.oisDiscounts[k]) = value(curve.intermediates[config.size + 1 + k]);
+            // Survival probabilities
+            value(vars.counterpartySurvival) = value(curve.intermediates[2 * config.size + 1]);
+            value(vars.ownSurvival) = value(curve.intermediates[2 * config.size + 2]);
+            // Randoms
+            for (Size m = 0; m < setup.fullGridRandoms; ++m)
+                value(vars.randoms[m]) = setup.allRandoms[n][m];
+
+            // Execute forward
+            double payoff_value;
+            jit.forward(&payoff_value);
+            mcPrice += payoff_value;
+
+            // Accumulate gradients w.r.t. intermediates
+            jit.clearDerivatives();
+            jit.setDerivative(outputSlot, 1.0);
+            jit.computeAdjoints();
+
+            // Forward rates
+            for (Size k = 0; k < config.size; ++k)
+                dPrice_dIntermediates[k] += jit.derivative(graph.input_ids[k]);
+            // Swap rate
+            dPrice_dIntermediates[config.size] += jit.derivative(graph.input_ids[config.size]);
+            // OIS discount factors
+            for (Size k = 0; k < config.size; ++k)
+                dPrice_dIntermediates[config.size + 1 + k] += jit.derivative(graph.input_ids[config.size + 1 + k]);
+            // Survival probabilities
+            dPrice_dIntermediates[2 * config.size + 1] += jit.derivative(graph.input_ids[2 * config.size + 1]);
+            dPrice_dIntermediates[2 * config.size + 2] += jit.derivative(graph.input_ids[2 * config.size + 2]);
+        }
+
+        // Average
+        mcPrice /= static_cast<double>(nrTrails);
+        for (Size k = 0; k < curve.numIntermediates; ++k)
+            dPrice_dIntermediates[k] /= static_cast<double>(nrTrails);
+
+        // Phase 4: Apply chain rule to get market sensitivities
+        std::vector<double> finalDerivatives(curve.numMarketQuotes);
+        applyChainRule(curve.jacobian.data(), dPrice_dIntermediates.data(), finalDerivatives.data(),
+                       curve.numIntermediates, curve.numMarketQuotes);
+
+        auto t_end = Clock::now();
+
+        if (iter >= warmup)
+        {
+            times.push_back(DurationMs(t_end - t_start).count());
+            phase1_times.push_back(DurationMs(t_curve_end - t_start).count());
+            phase2_times.push_back(0.0);
+            phase3_times.push_back(DurationMs(t_compile_end - t_curve_end).count());
+        }
+
+        // Capture validation data on first iteration
+        if (validation && iter == 0)
+        {
+            validation->method = "JIT";
+            validation->pv = mcPrice;
+            validation->sensitivities = finalDerivatives;
+        }
+    }
+
+    mean = computeMean(times);
+    stddev = computeStddev(times);
+    phase1_curve_mean = computeMean(phase1_times);
+    phase2_jacobian_mean = computeMean(phase2_times);
+    phase3_compile_mean = computeMean(phase3_times);
+}
+
+void runJITBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
+                         Size nrTrails, size_t warmup, size_t bench,
+                         double& mean, double& stddev,
+                         double& phase1_curve_mean, double& phase2_jacobian_mean,
+                         double& phase3_compile_mean,
+                         ValidationResult* validation = nullptr)
+{
+    runJITBenchmarkCVAImpl<xad::forge::ForgeBackend<double>>(
+        config, setup, nrTrails, warmup, bench, mean, stddev,
+        phase1_curve_mean, phase2_jacobian_mean, phase3_compile_mean, validation);
+}
+
+// ============================================================================
+// Forge JIT-AVX Benchmark (CVA) - Batched Execution
+// ============================================================================
+
+void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
+                            Size nrTrails, size_t warmup, size_t bench,
+                            double& mean, double& stddev,
+                            double& phase1_curve_mean, double& phase2_jacobian_mean,
+                            double& phase3_compile_mean,
+                            ValidationResult* validation = nullptr)
+{
+    std::vector<double> times;
+    std::vector<double> phase1_times;
+    std::vector<double> phase2_times;
+    std::vector<double> phase3_times;
+
+    for (size_t iter = 0; iter < warmup + bench; ++iter)
+    {
+        auto t_start = Clock::now();
+
+        // Phase 1: XAD tape - CVA curve bootstrap and Jacobian computation
+        tape_type tape;
+        CurveSetupResult curve = buildCVACurveAndJacobian(config, setup, tape);
+
+        auto t_curve_end = Clock::now();
+
+        // Phase 2: JIT graph recording
+        xad::JITCompiler<double> jit;
+
+        PayoffVariables<xad::AD> vars;
+        recordJITGraphCVA(jit, config, setup, curve, vars);
+
+        const auto& jitGraph = jit.getGraph();
+        jit.deactivate();
+
+        // Phase 3: AVX backend compilation
+        xad::forge::ForgeBackendAVX<double> avxBackend(false);
+        avxBackend.compile(jitGraph);
+
+        auto t_compile_end = Clock::now();
+
+        constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+        Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
+
+        std::vector<double> inputBatch(BATCH_SIZE);
+        std::vector<double> outputBatch(BATCH_SIZE);
+
+        double mcPrice = 0.0;
+        std::vector<double> dPrice_dIntermediates(curve.numIntermediates, 0.0);
+
+        // Number of inputs: forward rates + swap rate + OIS discounts + 2 survivals + randoms
+        std::size_t numInputs = config.size + 1 + config.size + 2 + setup.fullGridRandoms;
+        std::vector<double> inputGradients(numInputs * BATCH_SIZE);
+
+        for (Size batch = 0; batch < numBatches; ++batch)
+        {
+            Size batchStart = batch * BATCH_SIZE;
+            Size actualBatchSize = std::min(static_cast<Size>(BATCH_SIZE), nrTrails - batchStart);
+
+            // Set initRates
+            for (Size k = 0; k < config.size; ++k)
+            {
+                for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                    inputBatch[lane] = value(curve.initRates[k]);
+                avxBackend.setInput(k, inputBatch.data());
+            }
+
+            // Set swapRate
+            for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                inputBatch[lane] = value(curve.swapRate);
+            avxBackend.setInput(config.size, inputBatch.data());
+
+            // Set OIS discount factors
+            for (Size k = 0; k < config.size; ++k)
+            {
+                for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                    inputBatch[lane] = value(curve.intermediates[config.size + 1 + k]);
+                avxBackend.setInput(config.size + 1 + k, inputBatch.data());
+            }
+
+            // Set survival probabilities
+            for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                inputBatch[lane] = value(curve.intermediates[2 * config.size + 1]);
+            avxBackend.setInput(2 * config.size + 1, inputBatch.data());
+
+            for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                inputBatch[lane] = value(curve.intermediates[2 * config.size + 2]);
+            avxBackend.setInput(2 * config.size + 2, inputBatch.data());
+
+            // Set random numbers
+            Size randomInputOffset = 2 * config.size + 3;
+            for (Size m = 0; m < setup.fullGridRandoms; ++m)
+            {
+                for (int lane = 0; lane < BATCH_SIZE; ++lane)
+                {
+                    Size pathIdx = batchStart + lane;
+                    inputBatch[lane] = (pathIdx < nrTrails) ? setup.allRandoms[pathIdx][m] : 0.0;
+                }
+                avxBackend.setInput(randomInputOffset + m, inputBatch.data());
+            }
+
+            // Execute forward + backward
+            avxBackend.forwardAndBackward(outputBatch.data(), inputGradients.data());
+
+            // Accumulate MC price
+            for (Size lane = 0; lane < actualBatchSize; ++lane)
+                mcPrice += outputBatch[lane];
+
+            // Accumulate gradients for forward rates
+            for (Size k = 0; k < config.size; ++k)
+            {
+                for (Size lane = 0; lane < actualBatchSize; ++lane)
+                    dPrice_dIntermediates[k] += inputGradients[k * BATCH_SIZE + lane];
+            }
+
+            // Accumulate gradient for swap rate
+            for (Size lane = 0; lane < actualBatchSize; ++lane)
+                dPrice_dIntermediates[config.size] += inputGradients[config.size * BATCH_SIZE + lane];
+
+            // Accumulate gradients for OIS discount factors
+            for (Size k = 0; k < config.size; ++k)
+            {
+                for (Size lane = 0; lane < actualBatchSize; ++lane)
+                    dPrice_dIntermediates[config.size + 1 + k] += inputGradients[(config.size + 1 + k) * BATCH_SIZE + lane];
+            }
+
+            // Accumulate gradients for survival probabilities
+            for (Size lane = 0; lane < actualBatchSize; ++lane)
+                dPrice_dIntermediates[2 * config.size + 1] += inputGradients[(2 * config.size + 1) * BATCH_SIZE + lane];
+            for (Size lane = 0; lane < actualBatchSize; ++lane)
+                dPrice_dIntermediates[2 * config.size + 2] += inputGradients[(2 * config.size + 2) * BATCH_SIZE + lane];
+        }
+
+        // Average
+        mcPrice /= static_cast<double>(nrTrails);
+        for (Size k = 0; k < curve.numIntermediates; ++k)
+            dPrice_dIntermediates[k] /= static_cast<double>(nrTrails);
+
+        // Phase 4: Apply chain rule to get market sensitivities
+        std::vector<double> finalDerivatives(curve.numMarketQuotes);
+        applyChainRule(curve.jacobian.data(), dPrice_dIntermediates.data(), finalDerivatives.data(),
+                       curve.numIntermediates, curve.numMarketQuotes);
+
+        auto t_end = Clock::now();
+
+        if (iter >= warmup)
+        {
+            times.push_back(DurationMs(t_end - t_start).count());
+            phase1_times.push_back(DurationMs(t_curve_end - t_start).count());
+            phase2_times.push_back(0.0);
+            phase3_times.push_back(DurationMs(t_compile_end - t_curve_end).count());
+        }
+
+        // Capture validation data on first iteration
+        if (validation && iter == 0)
+        {
+            validation->method = "JITAVX";
+            validation->pv = mcPrice;
+            validation->sensitivities = finalDerivatives;
+        }
+    }
+
+    mean = computeMean(times);
+    stddev = computeStddev(times);
+    phase1_curve_mean = computeMean(phase1_times);
+    phase2_jacobian_mean = computeMean(phase2_times);
+    phase3_compile_mean = computeMean(phase3_times);
+}
+
 #endif // QLRISKS_HAS_FORGE
+
+// ============================================================================
+// XAD-Split Benchmark (CVA) - per-path tape recording
+// ============================================================================
+
+void runXADSplitBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
+                              Size nrTrails, size_t warmup, size_t bench,
+                              double& mean, double& stddev,
+                              double& fixed_cost_mean,
+                              ValidationResult* validation = nullptr)
+{
+    std::vector<double> times;
+    std::vector<double> fixed_times;
+
+    for (size_t iter = 0; iter < warmup + bench; ++iter)
+    {
+        auto t_start = Clock::now();
+
+        // Phase 1: Curve bootstrap and Jacobian computation (CVA)
+        tape_type jacobianTape;
+        CurveSetupResult curve = buildCVACurveAndJacobian(config, setup, jacobianTape);
+
+        // Pre-compute LMM step data
+        LMMStepData stepData = precomputeLMMStepData(curve.process, setup, config.size);
+
+        auto t_jacobian_end = Clock::now();
+
+        // Phase 2: MC simulation with per-path XAD tape
+        tape_type mcTape;
+        double mcPrice = 0.0;
+        std::vector<double> dPrice_dIntermediates(curve.numIntermediates, 0.0);
+
+        // Cache intermediate values as doubles
+        std::vector<double> initRatesVal(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            initRatesVal[k] = value(curve.initRates[k]);
+        double swapRateVal = value(curve.swapRate);
+        std::vector<double> oisDiscountsVal(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            oisDiscountsVal[k] = value(curve.intermediates[config.size + 1 + k]);
+        double counterpartySurvivalVal = value(curve.intermediates[2 * config.size + 1]);
+        double ownSurvivalVal = value(curve.intermediates[2 * config.size + 2]);
+
+        for (Size n = 0; n < nrTrails; ++n)
+        {
+            mcTape.clearAll();
+
+            PayoffVariables<RealAD> vars;
+            vars.initRates.resize(config.size);
+            vars.oisDiscounts.resize(config.size);
+
+            // Register inputs: forward rates
+            for (Size k = 0; k < config.size; ++k)
+            {
+                vars.initRates[k] = initRatesVal[k];
+                mcTape.registerInput(vars.initRates[k]);
+            }
+            // Swap rate
+            vars.swapRate = swapRateVal;
+            mcTape.registerInput(vars.swapRate);
+            // OIS discount factors
+            for (Size k = 0; k < config.size; ++k)
+            {
+                vars.oisDiscounts[k] = oisDiscountsVal[k];
+                mcTape.registerInput(vars.oisDiscounts[k]);
+            }
+            // Survival probabilities
+            vars.counterpartySurvival = counterpartySurvivalVal;
+            mcTape.registerInput(vars.counterpartySurvival);
+            vars.ownSurvival = ownSurvivalVal;
+            mcTape.registerInput(vars.ownSurvival);
+
+            mcTape.newRecording();
+
+            // Compute payoff using CVA path payoff function
+            RealAD npv = computePathPayoffWithMatricesCVA<RealAD>(config, setup, stepData, vars, setup.allRandoms[n]);
+
+            // max(npv, 0)
+            RealAD payoff = (value(npv) > 0.0) ? npv : RealAD(0.0);
+
+            // Apply CVA factor
+            RealAD cvaFactor = RealAD(1.0)
+                - (RealAD(1.0) - vars.counterpartySurvival) * RealAD(1.0 - config.counterpartyRecovery)
+                + (RealAD(1.0) - vars.ownSurvival) * RealAD(1.0 - config.ownRecovery);
+            RealAD adjustedPayoff = payoff * cvaFactor;
+
+            // Compute adjoints for this path
+            mcTape.registerOutput(adjustedPayoff);
+            derivative(adjustedPayoff) = 1.0;
+            mcTape.computeAdjoints();
+
+            // Accumulate
+            mcPrice += value(adjustedPayoff);
+            for (Size k = 0; k < config.size; ++k)
+                dPrice_dIntermediates[k] += derivative(vars.initRates[k]);
+            dPrice_dIntermediates[config.size] += derivative(vars.swapRate);
+            for (Size k = 0; k < config.size; ++k)
+                dPrice_dIntermediates[config.size + 1 + k] += derivative(vars.oisDiscounts[k]);
+            dPrice_dIntermediates[2 * config.size + 1] += derivative(vars.counterpartySurvival);
+            dPrice_dIntermediates[2 * config.size + 2] += derivative(vars.ownSurvival);
+        }
+
+        // Average
+        mcPrice /= static_cast<double>(nrTrails);
+        for (Size k = 0; k < curve.numIntermediates; ++k)
+            dPrice_dIntermediates[k] /= static_cast<double>(nrTrails);
+
+        // Phase 3: Apply chain rule
+        std::vector<double> finalDerivatives(curve.numMarketQuotes);
+        applyChainRule(curve.jacobian.data(), dPrice_dIntermediates.data(), finalDerivatives.data(),
+                       curve.numIntermediates, curve.numMarketQuotes);
+
+        auto t_end = Clock::now();
+
+        if (iter >= warmup)
+        {
+            times.push_back(DurationMs(t_end - t_start).count());
+            fixed_times.push_back(DurationMs(t_jacobian_end - t_start).count());
+        }
+
+        // Capture validation data
+        if (validation && iter == 0)
+        {
+            validation->method = "XADSPLIT";
+            validation->pv = mcPrice;
+            validation->sensitivities = finalDerivatives;
+        }
+    }
+
+    mean = computeMean(times);
+    stddev = computeStddev(times);
+    fixed_cost_mean = computeMean(fixed_times);
+}
 
 // ============================================================================
 // Main AAD Benchmark Runner (Single-Curve)
@@ -2070,6 +2812,207 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
 }
 
 // ============================================================================
+// XAD Tape-based AAD Benchmark for CVA (with credit curves)
+// ============================================================================
+
+void runXADBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
+                         Size nrTrails, size_t warmup, size_t bench,
+                         double& mean, double& stddev,
+                         ValidationResult* validation = nullptr)
+{
+    std::vector<double> times;
+
+    for (size_t iter = 0; iter < warmup + bench; ++iter)
+    {
+        auto t_start = Clock::now();
+
+        tape_type tape;
+
+        // Register forecasting curve inputs
+        std::vector<RealAD> depositRates(config.numDeposits);
+        std::vector<RealAD> swapRatesAD(config.numSwaps);
+        for (Size idx = 0; idx < config.numDeposits; ++idx)
+            depositRates[idx] = config.depoRates[idx];
+        for (Size idx = 0; idx < config.numSwaps; ++idx)
+            swapRatesAD[idx] = config.swapRates[idx];
+
+        // Register discounting curve inputs (OIS)
+        std::vector<RealAD> oisDepoRates(config.numOisDeposits);
+        std::vector<RealAD> oisSwapRatesAD(config.numOisSwaps);
+        for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+            oisDepoRates[idx] = config.oisDepoRates[idx];
+        for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+            oisSwapRatesAD[idx] = config.oisSwapRates[idx];
+
+        // Register credit curve inputs (CDS spreads)
+        std::vector<RealAD> counterpartyCdsSpreadsAD(config.numCounterpartyCds);
+        std::vector<RealAD> ownCdsSpreadsAD(config.numOwnCds);
+        for (Size idx = 0; idx < config.numCounterpartyCds; ++idx)
+            counterpartyCdsSpreadsAD[idx] = config.counterpartyCdsSpreads[idx];
+        for (Size idx = 0; idx < config.numOwnCds; ++idx)
+            ownCdsSpreadsAD[idx] = config.ownCdsSpreads[idx];
+
+        tape.registerInputs(depositRates);
+        tape.registerInputs(swapRatesAD);
+        tape.registerInputs(oisDepoRates);
+        tape.registerInputs(oisSwapRatesAD);
+        tape.registerInputs(counterpartyCdsSpreadsAD);
+        tape.registerInputs(ownCdsSpreadsAD);
+        tape.newRecording();
+
+        // Price using CVA function
+        RealAD price = priceSwaptionWithCVA<RealAD>(
+            config, setup, depositRates, swapRatesAD, oisDepoRates, oisSwapRatesAD,
+            counterpartyCdsSpreadsAD, ownCdsSpreadsAD, nrTrails);
+
+        // Compute adjoints
+        tape.registerOutput(price);
+        derivative(price) = 1.0;
+        tape.computeAdjoints();
+
+        auto t_end = Clock::now();
+
+        if (iter >= warmup)
+        {
+            times.push_back(DurationMs(t_end - t_start).count());
+        }
+
+        // Capture validation data on first iteration (before clearing tape)
+        if (validation && iter == 0)
+        {
+            validation->method = "XAD";
+            validation->pv = value(price);
+            validation->sensitivities.resize(config.numMarketQuotes());
+            Size q = 0;
+            // Forecasting curve
+            for (Size idx = 0; idx < config.numDeposits; ++idx)
+                validation->sensitivities[q++] = derivative(depositRates[idx]);
+            for (Size idx = 0; idx < config.numSwaps; ++idx)
+                validation->sensitivities[q++] = derivative(swapRatesAD[idx]);
+            // Discounting curve
+            for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+                validation->sensitivities[q++] = derivative(oisDepoRates[idx]);
+            for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+                validation->sensitivities[q++] = derivative(oisSwapRatesAD[idx]);
+            // Credit curves
+            for (Size idx = 0; idx < config.numCounterpartyCds; ++idx)
+                validation->sensitivities[q++] = derivative(counterpartyCdsSpreadsAD[idx]);
+            for (Size idx = 0; idx < config.numOwnCds; ++idx)
+                validation->sensitivities[q++] = derivative(ownCdsSpreadsAD[idx]);
+        }
+
+        tape.clearAll();
+    }
+
+    mean = computeMean(times);
+    stddev = computeStddev(times);
+}
+
+// ============================================================================
+// Main AAD Benchmark Runner for CVA (90 inputs)
+// ============================================================================
+
+std::vector<TimingResult> runAADBenchmarkCVA(const BenchmarkConfig& config,
+                                              bool quickMode, bool xadOnly,
+                                              ValidationResult* xadValidation = nullptr,
+                                              ValidationResult* xadSplitValidation = nullptr,
+                                              ValidationResult* jitValidation = nullptr,
+                                              ValidationResult* jitAvxValidation = nullptr)
+{
+    std::vector<TimingResult> results;
+
+    // Setup LMM
+    LMMSetup setup(config);
+
+    std::cout << "================================================================================\n";
+    std::cout << "  RUNNING AAD BENCHMARKS (CVA - 90 inputs)\n";
+    std::cout << "================================================================================\n";
+    std::cout << "\n";
+
+    for (size_t tc = 0; tc < config.pathCounts.size(); ++tc)
+    {
+        int paths = config.pathCounts[tc];
+        Size nrTrails = static_cast<Size>(paths);
+
+        TimingResult result;
+        result.pathCount = paths;
+
+        std::cout << "  [" << (tc + 1) << "/" << config.pathCounts.size() << "] "
+                  << formatPathCount(paths) << " paths (" << config.numMarketQuotes()
+                  << " sensitivities) " << std::flush;
+
+        // For high path counts, skip warmup and use fewer iterations
+        size_t warmup, bench;
+        if (nrTrails >= 100000) {
+            warmup = 0;
+            bench = 1;  // Single run for 100K+ (too expensive for multiple)
+        } else if (nrTrails >= 10000) {
+            warmup = 0;
+            bench = 2;
+        } else {
+            warmup = quickMode ? 1 : config.warmupIterations;
+            bench = quickMode ? 2 : config.benchmarkIterations;
+        }
+
+        // Capture validation at VALIDATION_PATH_COUNT
+        bool captureValidation = (paths == VALIDATION_PATH_COUNT);
+
+        // XAD tape (CVA)
+        runXADBenchmarkCVA(config, setup, nrTrails, warmup, bench,
+                            result.xad_mean, result.xad_std,
+                            captureValidation ? xadValidation : nullptr);
+        result.xad_enabled = true;
+        std::cout << "XAD=" << std::fixed << std::setprecision(1) << result.xad_mean << "ms ";
+
+        // XAD-Split (CVA)
+        {
+            double xad_split_fixed = 0;
+            runXADSplitBenchmarkCVA(config, setup, nrTrails, warmup, bench,
+                                     result.xad_split_mean, result.xad_split_std, xad_split_fixed,
+                                     captureValidation ? xadSplitValidation : nullptr);
+            result.xad_split_enabled = true;
+            result.xad_split_fixed_mean = xad_split_fixed;
+            std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
+        }
+
+#if defined(QLRISKS_HAS_FORGE)
+        if (!xadOnly)
+        {
+            // Forge JIT (CVA)
+            double jit_p1 = 0, jit_p2 = 0, jit_p3 = 0;
+            runJITBenchmarkCVA(config, setup, nrTrails, warmup, bench,
+                                result.jit_mean, result.jit_std,
+                                jit_p1, jit_p2, jit_p3,
+                                captureValidation ? jitValidation : nullptr);
+            result.jit_enabled = true;
+            result.jit_phase1_curve_mean = jit_p1;
+            result.jit_phase2_jacobian_mean = jit_p2;
+            result.jit_phase3_compile_mean = jit_p3;
+            result.jit_fixed_mean = jit_p1 + jit_p2 + jit_p3;
+            std::cout << "JIT=" << result.jit_mean << "ms ";
+
+            // Forge JIT-AVX (CVA, batched execution)
+            double avx_p1 = 0, avx_p2 = 0, avx_p3 = 0;
+            runJITAVXBenchmarkCVA(config, setup, nrTrails, warmup, bench,
+                                   result.jit_avx_mean, result.jit_avx_std,
+                                   avx_p1, avx_p2, avx_p3,
+                                   captureValidation ? jitAvxValidation : nullptr);
+            result.jit_avx_enabled = true;
+            std::cout << "JIT-AVX=" << result.jit_avx_mean << "ms";
+        }
+#else
+        (void)xadOnly;
+#endif
+
+        std::cout << "\n";
+        results.push_back(result);
+    }
+
+    std::cout << "\n";
+    return results;
+}
+
+// ============================================================================
 // Output Results in Machine-Parseable Format
 // ============================================================================
 
@@ -2146,10 +3089,9 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
 
 int main(int argc, char* argv[])
 {
-    bool runLite = false;
-    bool runLiteExtended = false;
     bool runProduction = false;
-    bool runAll = true;  // Default: run lite and lite-extended (not production)
+    bool runCVA = false;
+    bool runAll = true;  // Default: run both production and CVA
     bool quickMode = false;
     bool xadOnly = false;
     bool runDiagnose = false;
@@ -2158,26 +3100,20 @@ int main(int argc, char* argv[])
     // Parse arguments
     for (int i = 1; i < argc; ++i)
     {
-        if (strcmp(argv[i], "--lite") == 0)
-        {
-            runLite = true;
-            runAll = false;
-        }
-        else if (strcmp(argv[i], "--lite-extended") == 0)
-        {
-            runLiteExtended = true;
-            runAll = false;
-        }
-        else if (strcmp(argv[i], "--production") == 0)
+        if (strcmp(argv[i], "--production") == 0)
         {
             runProduction = true;
+            runAll = false;
+        }
+        else if (strcmp(argv[i], "--cva") == 0)
+        {
+            runCVA = true;
             runAll = false;
         }
         else if (strcmp(argv[i], "--all") == 0)
         {
-            runLite = true;
-            runLiteExtended = true;
             runProduction = true;
+            runCVA = true;
             runAll = false;
         }
         else if (strcmp(argv[i], "--quick") == 0)
@@ -2201,27 +3137,25 @@ int main(int argc, char* argv[])
         {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
-            std::cout << "  --lite           Run lite benchmark (1Y into 1Y, 9 sensitivities)\n";
-            std::cout << "  --lite-extended  Run lite-extended benchmark (5Y into 5Y, 14 sensitivities)\n";
-            std::cout << "  --production     Run production benchmark (5Y into 5Y dual-curve, 47 sensitivities)\n";
-            std::cout << "  --all            Run all benchmarks including production\n";
+            std::cout << "  --production     Run production benchmark (5Y into 5Y dual-curve, 45 sensitivities)\n";
+            std::cout << "  --cva            Run CVA benchmark (5Y into 5Y dual-curve + credit, 90 sensitivities)\n";
+            std::cout << "  --all            Run all benchmarks (production + CVA)\n";
             std::cout << "  --quick          Quick mode (fewer iterations)\n";
             std::cout << "  --xad-only       Run only XAD tape (no JIT)\n";
             std::cout << "  --diagnose       Run diagnostic comparison of XAD-Split vs JIT\n";
             std::cout << "  --diagnose-paths=N  Number of paths for diagnostic (default: 100)\n";
             std::cout << "  --help           Show this message\n";
             std::cout << "\n";
-            std::cout << "Default: runs lite and lite-extended (not production)\n";
+            std::cout << "Default: runs both production and CVA benchmarks\n";
             return 0;
         }
     }
 
-    // Default behavior: run lite and lite-extended
+    // Default behavior: run both production and CVA
     if (runAll)
     {
-        runLite = true;
-        runLiteExtended = true;
-        runProduction = false;  // Production opt-in only
+        runProduction = true;
+        runCVA = true;
     }
 
     printHeader();
@@ -2233,21 +3167,13 @@ int main(int argc, char* argv[])
     {
         std::cout << "\nRunning XAD-Split vs JIT diagnostic comparison...\n";
 
-        // Lite config diagnostic
+        // Production config diagnostic
         {
-            BenchmarkConfig liteConfig;
-            LMMSetup setup(liteConfig);
-            std::cout << "\n--- LITE CONFIG ---\n";
-            runDiagnosticComparison(liteConfig, setup, diagnosePaths);
-        }
-
-        // Lite-Extended config diagnostic
-        {
-            BenchmarkConfig liteExtConfig;
-            liteExtConfig.setLiteExtendedConfig();
-            LMMSetup setup(liteExtConfig);
-            std::cout << "\n--- LITE-EXTENDED CONFIG ---\n";
-            runDiagnosticComparison(liteExtConfig, setup, diagnosePaths);
+            BenchmarkConfig prodConfig;
+            prodConfig.setProductionConfig();
+            LMMSetup setup(prodConfig);
+            std::cout << "\n--- PRODUCTION CONFIG ---\n";
+            runDiagnosticComparison(prodConfig, setup, diagnosePaths);
         }
 
         return 0;
@@ -2255,49 +3181,6 @@ int main(int argc, char* argv[])
 #endif
 
     int benchmarkNum = 1;
-
-    if (runLite)
-    {
-        BenchmarkConfig liteConfig;
-        printBenchmarkHeader(liteConfig, benchmarkNum++);
-
-        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
-        auto results = runAADBenchmark(liteConfig, quickMode, xadOnly,
-                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
-        printResultsTable(results);
-        printResultsFooter(liteConfig);
-        outputResultsForParsing(results, liteConfig.configId);
-        if (!xadValidation.sensitivities.empty())
-            outputValidationData(xadValidation, liteConfig.configId);
-        if (!xadSplitValidation.sensitivities.empty())
-            outputValidationData(xadSplitValidation, liteConfig.configId);
-        if (!jitValidation.sensitivities.empty())
-            outputValidationData(jitValidation, liteConfig.configId);
-        if (!jitAvxValidation.sensitivities.empty())
-            outputValidationData(jitAvxValidation, liteConfig.configId);
-    }
-
-    if (runLiteExtended)
-    {
-        BenchmarkConfig liteExtConfig;
-        liteExtConfig.setLiteExtendedConfig();
-        printBenchmarkHeader(liteExtConfig, benchmarkNum++);
-
-        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
-        auto results = runAADBenchmark(liteExtConfig, quickMode, xadOnly,
-                                       &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
-        printResultsTable(results);
-        printResultsFooter(liteExtConfig);
-        outputResultsForParsing(results, liteExtConfig.configId);
-        if (!xadValidation.sensitivities.empty())
-            outputValidationData(xadValidation, liteExtConfig.configId);
-        if (!xadSplitValidation.sensitivities.empty())
-            outputValidationData(xadSplitValidation, liteExtConfig.configId);
-        if (!jitValidation.sensitivities.empty())
-            outputValidationData(jitValidation, liteExtConfig.configId);
-        if (!jitAvxValidation.sensitivities.empty())
-            outputValidationData(jitAvxValidation, liteExtConfig.configId);
-    }
 
     if (runProduction)
     {
@@ -2319,6 +3202,28 @@ int main(int argc, char* argv[])
             outputValidationData(jitValidation, prodConfig.configId);
         if (!jitAvxValidation.sensitivities.empty())
             outputValidationData(jitAvxValidation, prodConfig.configId);
+    }
+
+    if (runCVA)
+    {
+        BenchmarkConfig cvaConfig;
+        cvaConfig.setCVAConfig();
+        printBenchmarkHeader(cvaConfig, benchmarkNum++);
+
+        ValidationResult xadValidation, xadSplitValidation, jitValidation, jitAvxValidation;
+        auto results = runAADBenchmarkCVA(cvaConfig, quickMode, xadOnly,
+                                          &xadValidation, &xadSplitValidation, &jitValidation, &jitAvxValidation);
+        printResultsTable(results);
+        printResultsFooter(cvaConfig);
+        outputResultsForParsing(results, cvaConfig.configId);
+        if (!xadValidation.sensitivities.empty())
+            outputValidationData(xadValidation, cvaConfig.configId);
+        if (!xadSplitValidation.sensitivities.empty())
+            outputValidationData(xadSplitValidation, cvaConfig.configId);
+        if (!jitValidation.sensitivities.empty())
+            outputValidationData(jitValidation, cvaConfig.configId);
+        if (!jitAvxValidation.sensitivities.empty())
+            outputValidationData(jitAvxValidation, cvaConfig.configId);
     }
 
     printFooter();

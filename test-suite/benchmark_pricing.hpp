@@ -28,6 +28,11 @@
 #include <ql/time/daycounters/actual360.hpp>
 #include <ql/time/daycounters/thirty360.hpp>
 
+// Credit curve includes for CVA
+#include <ql/termstructures/credit/defaultprobabilityhelpers.hpp>
+#include <ql/termstructures/credit/piecewisedefaultcurve.hpp>
+#include <ql/termstructures/credit/probabilitytraits.hpp>
+
 // LMM Monte Carlo includes
 #include <ql/legacy/libormarketmodels/lfmcovarproxy.hpp>
 #include <ql/legacy/libormarketmodels/liborforwardmodel.hpp>
@@ -35,12 +40,6 @@
 #include <ql/legacy/libormarketmodels/lmlinexpvolmodel.hpp>
 #include <ql/math/randomnumbers/rngtraits.hpp>
 #include <ql/methods/montecarlo/multipathgenerator.hpp>
-
-// Additional includes for matrix operations
-#include <ql/math/matrix.hpp>
-#include <vector>
-#include <cmath>
-#include <type_traits>
 
 namespace benchmark {
 
@@ -193,12 +192,11 @@ struct LMMSetup
 // Optimized LMM evolve: uses pre-computed matrices (computed once per step)
 // This matches evolveLMM from benchmark_aad.cpp exactly, but takes matrices as params
 // ============================================================================
-template <typename ArrayType, typename MatrixElemType>
+template <typename ArrayType>
 void evolveWithMatrices(
     ArrayType& asset,
-    const std::vector<MatrixElemType>& diff, // Flattened diffusion matrix
-    const std::vector<MatrixElemType>& covariance, // Flattened covariance matrix
-    Size numFactors, // Needed for diff stride
+    const Matrix& diff,
+    const Matrix& covariance,
     const std::vector<Time>& accrualStart,
     const std::vector<Time>& accrualEnd,
     Size m,
@@ -223,13 +221,13 @@ void evolveWithMatrices(
         // Drift term using m1
         ElemType drift1 = ElemType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift1 = drift1 + m1[j] * covariance[j * size + k]; // Flattened access
-        const ElemType d = (drift1 - ElemType(0.5) * covariance[k * size + k]) * dt; // Flattened access
+            drift1 = drift1 + m1[j] * covariance[j][k];
+        const ElemType d = (drift1 - ElemType(0.5) * covariance[k][k]) * dt;
 
         // Diffusion term
         ElemType r = ElemType(0.0);
         for (Size f = 0; f < dw.size(); ++f)
-            r = r + diff[k * numFactors + f] * dw[f]; // Flattened access
+            r = r + diff[k][f] * dw[f];
         r = r * sdt;
 
         // Corrector step
@@ -239,10 +237,10 @@ void evolveWithMatrices(
         // Drift term using m2
         ElemType drift2 = ElemType(0.0);
         for (Size j = m; j <= k; ++j)
-            drift2 = drift2 + m2[j] * covariance[j * size + k]; // Flattened access
+            drift2 = drift2 + m2[j] * covariance[j][k];
 
         // Final evolved rate
-        asset[k] = asset[k] * exp(ElemType(0.5) * (d + (drift2 - ElemType(0.5) * covariance[k * size + k]) * dt) + r); // Flattened access
+        asset[k] = asset[k] * exp(ElemType(0.5) * (d + (drift2 - ElemType(0.5) * covariance[k][k]) * dt) + r);
     }
 }
 
@@ -323,9 +321,8 @@ RealType priceSwaption(const BenchmarkConfig& config,
 
     // Pre-compute matrices for each step (computed once, not per path!)
     // This is the key optimization: matrices depend only on time, not on path
-    // Use Real (which is AReal in AD builds) to preserve AD correctness
-    std::vector<std::vector<Real>> stepDiff(setup.fullGridSteps);
-    std::vector<std::vector<Real>> stepCov(setup.fullGridSteps);
+    std::vector<Matrix> stepDiff(setup.fullGridSteps);
+    std::vector<Matrix> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -333,20 +330,8 @@ RealType priceSwaption(const BenchmarkConfig& config,
     for (Size step = 1; step <= setup.fullGridSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        Matrix diff = process->covarParam()->diffusion(t0, Array());
-        Matrix cov = process->covarParam()->covariance(t0, Array());
-        
-        // Flatten matrices - keep as Real type for AD correctness
-        stepDiff[step - 1].resize(diff.rows() * diff.columns());
-        for(Size i=0; i<diff.rows(); ++i)
-            for(Size j=0; j<diff.columns(); ++j)
-                stepDiff[step - 1][i * diff.columns() + j] = diff[i][j];
-
-        stepCov[step - 1].resize(cov.rows() * cov.columns());
-        for(Size i=0; i<cov.rows(); ++i)
-            for(Size j=0; j<cov.columns(); ++j)
-                stepCov[step - 1][i * cov.columns() + j] = cov[i][j];
-
+        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
         stepM[step - 1] = process->nextIndexReset(t0);
         stepDt[step - 1] = setup.grid.dt(step - 1);
         stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
@@ -374,7 +359,7 @@ RealType priceSwaption(const BenchmarkConfig& config,
                 dw[f] = setup.allRandoms[n][offset + f];
 
             // Use pre-computed matrices instead of process->evolve()
-            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1], setup.numFactors,
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
                                accrualStart, accrualEnd, stepM[step - 1],
                                stepSdt[step - 1], stepDt[step - 1], dw);
 
@@ -547,10 +532,9 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
 
     // ========================================================================
     // Pre-compute matrices for each step (computed once, not per path!)
-    // Use Real (which is AReal in AD builds) to preserve AD correctness
     // ========================================================================
-    std::vector<std::vector<Real>> stepDiff(setup.fullGridSteps);
-    std::vector<std::vector<Real>> stepCov(setup.fullGridSteps);
+    std::vector<Matrix> stepDiff(setup.fullGridSteps);
+    std::vector<Matrix> stepCov(setup.fullGridSteps);
     std::vector<Size> stepM(setup.fullGridSteps);
     std::vector<Real> stepDt(setup.fullGridSteps);
     std::vector<Real> stepSdt(setup.fullGridSteps);
@@ -558,20 +542,8 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
     for (Size step = 1; step <= setup.fullGridSteps; ++step)
     {
         Time t0 = setup.grid[step - 1];
-        Matrix diff = process->covarParam()->diffusion(t0, Array());
-        Matrix cov = process->covarParam()->covariance(t0, Array());
-        
-        // Flatten matrices - keep as Real type for AD correctness
-        stepDiff[step - 1].resize(diff.rows() * diff.columns());
-        for(Size i=0; i<diff.rows(); ++i)
-            for(Size j=0; j<diff.columns(); ++j)
-                stepDiff[step - 1][i * diff.columns() + j] = diff[i][j];
-
-        stepCov[step - 1].resize(cov.rows() * cov.columns());
-        for(Size i=0; i<cov.rows(); ++i)
-            for(Size j=0; j<cov.columns(); ++j)
-                stepCov[step - 1][i * cov.columns() + j] = cov[i][j];
-
+        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
         stepM[step - 1] = process->nextIndexReset(t0);
         stepDt[step - 1] = setup.grid.dt(step - 1);
         stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
@@ -601,7 +573,7 @@ RealType priceSwaptionDualCurve(const BenchmarkConfig& config,
                 dw[f] = setup.allRandoms[n][offset + f];
 
             // Use pre-computed matrices instead of process->evolve()
-            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1], setup.numFactors,
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
                                accrualStart, accrualEnd, stepM[step - 1],
                                stepSdt[step - 1], stepDt[step - 1], dw);
 
@@ -663,6 +635,264 @@ RealType priceSwaptionAuto(const BenchmarkConfig& config,
     {
         return priceSwaption(config, setup, depositRates, swapRates, nrTrails);
     }
+}
+
+// ============================================================================
+// CVA Pricing Function (Dual-Curve + Credit Curves)
+// Prices swaption with CVA adjustment using credit curves for both
+// counterparty and own credit risk.
+// ============================================================================
+
+template <typename RealType>
+RealType priceSwaptionWithCVA(const BenchmarkConfig& config,
+                               const LMMSetup& setup,
+                               const std::vector<RealType>& depositRates,
+                               const std::vector<RealType>& swapRates,
+                               const std::vector<RealType>& oisDepoRates,
+                               const std::vector<RealType>& oisSwapRates,
+                               const std::vector<RealType>& counterpartyCdsSpreads,
+                               const std::vector<RealType>& ownCdsSpreads,
+                               Size nrTrails)
+{
+    // ========================================================================
+    // Build FORECASTING curve (Euribor deposits + swaps)
+    // ========================================================================
+    RelinkableHandle<YieldTermStructure> euriborTS;
+    auto euribor6m = ext::make_shared<Euribor6M>(euriborTS);
+    euribor6m->addFixing(Date(2, September, 2005), 0.04);
+
+    std::vector<ext::shared_ptr<RateHelper>> forecastingInstruments;
+    for (Size idx = 0; idx < config.numDeposits; ++idx)
+    {
+        auto depoQuote = ext::make_shared<SimpleQuote>(depositRates[idx]);
+        forecastingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+            Handle<Quote>(depoQuote), config.depoTenors[idx], setup.fixingDays,
+            setup.calendar, ModifiedFollowing, true, setup.dayCounter));
+    }
+    for (Size idx = 0; idx < config.numSwaps; ++idx)
+    {
+        auto swapQuote = ext::make_shared<SimpleQuote>(swapRates[idx]);
+        forecastingInstruments.push_back(ext::make_shared<SwapRateHelper>(
+            Handle<Quote>(swapQuote), config.swapTenors[idx],
+            setup.calendar, Annual, Unadjusted, Thirty360(Thirty360::BondBasis),
+            euribor6m));
+    }
+
+    auto forecastingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+        setup.settlementDate, forecastingInstruments, setup.dayCounter);
+    forecastingCurve->enableExtrapolation();
+    euriborTS.linkTo(forecastingCurve);
+
+    // ========================================================================
+    // Build DISCOUNTING curve (OIS deposits + swaps)
+    // ========================================================================
+    RelinkableHandle<YieldTermStructure> oisTS;
+    auto eonia = ext::make_shared<Eonia>(oisTS);
+
+    std::vector<ext::shared_ptr<RateHelper>> discountingInstruments;
+    for (Size idx = 0; idx < config.numOisDeposits; ++idx)
+    {
+        auto oisDepoQuote = ext::make_shared<SimpleQuote>(oisDepoRates[idx]);
+        discountingInstruments.push_back(ext::make_shared<DepositRateHelper>(
+            Handle<Quote>(oisDepoQuote), config.oisDepoTenors[idx], setup.fixingDays,
+            setup.calendar, ModifiedFollowing, true, Actual360()));
+    }
+    for (Size idx = 0; idx < config.numOisSwaps; ++idx)
+    {
+        auto oisSwapQuote = ext::make_shared<SimpleQuote>(oisSwapRates[idx]);
+        discountingInstruments.push_back(ext::make_shared<OISRateHelper>(
+            2, config.oisSwapTenors[idx], Handle<Quote>(oisSwapQuote), eonia));
+    }
+
+    auto discountingCurve = ext::make_shared<PiecewiseYieldCurve<ZeroYield, Linear>>(
+        setup.settlementDate, discountingInstruments, setup.dayCounter);
+    discountingCurve->enableExtrapolation();
+    oisTS.linkTo(discountingCurve);
+
+    // ========================================================================
+    // Build COUNTERPARTY CREDIT curve (CDS spreads -> hazard rates)
+    // ========================================================================
+    std::vector<ext::shared_ptr<DefaultProbabilityHelper>> counterpartyHelpers;
+    for (Size idx = 0; idx < config.numCounterpartyCds; ++idx)
+    {
+        auto cdsQuote = ext::make_shared<SimpleQuote>(counterpartyCdsSpreads[idx]);
+        counterpartyHelpers.push_back(ext::make_shared<SpreadCdsHelper>(
+            Handle<Quote>(cdsQuote), config.counterpartyCdsTenors[idx],
+            0, setup.calendar, Quarterly, ModifiedFollowing,
+            DateGeneration::CDS2015, setup.dayCounter,
+            config.counterpartyRecovery, Handle<YieldTermStructure>(discountingCurve)));
+    }
+
+    auto counterpartyCreditCurve = ext::make_shared<PiecewiseDefaultCurve<HazardRate, BackwardFlat>>(
+        setup.settlementDate, counterpartyHelpers, setup.dayCounter);
+    counterpartyCreditCurve->enableExtrapolation();
+
+    // ========================================================================
+    // Build OWN CREDIT curve (CDS spreads -> hazard rates)
+    // ========================================================================
+    std::vector<ext::shared_ptr<DefaultProbabilityHelper>> ownHelpers;
+    for (Size idx = 0; idx < config.numOwnCds; ++idx)
+    {
+        auto cdsQuote = ext::make_shared<SimpleQuote>(ownCdsSpreads[idx]);
+        ownHelpers.push_back(ext::make_shared<SpreadCdsHelper>(
+            Handle<Quote>(cdsQuote), config.ownCdsTenors[idx],
+            0, setup.calendar, Quarterly, ModifiedFollowing,
+            DateGeneration::CDS2015, setup.dayCounter,
+            config.ownRecovery, Handle<YieldTermStructure>(discountingCurve)));
+    }
+
+    auto ownCreditCurve = ext::make_shared<PiecewiseDefaultCurve<HazardRate, BackwardFlat>>(
+        setup.settlementDate, ownHelpers, setup.dayCounter);
+    ownCreditCurve->enableExtrapolation();
+
+    // ========================================================================
+    // Extract zero rates for LMM from forecasting curve
+    // ========================================================================
+    std::vector<Date> curveDates;
+    std::vector<RealType> zeroRates;
+    curveDates.push_back(setup.settlementDate);
+    zeroRates.push_back(forecastingCurve->zeroRate(setup.settlementDate, setup.dayCounter, Continuous).rate());
+    Date endDate = setup.settlementDate + config.curveEndYears * Years;
+    curveDates.push_back(endDate);
+    zeroRates.push_back(forecastingCurve->zeroRate(endDate, setup.dayCounter, Continuous).rate());
+
+    // Convert to Rate for ZeroCurve
+    std::vector<Rate> zeroRates_ql;
+    for (const auto& r : zeroRates) zeroRates_ql.push_back(r);
+
+    // ========================================================================
+    // Build LMM process using forecasting curve
+    // ========================================================================
+    RelinkableHandle<YieldTermStructure> termStructure;
+    ext::shared_ptr<IborIndex> index(new Euribor6M(termStructure));
+    index->addFixing(Date(2, September, 2005), 0.04);
+    termStructure.linkTo(ext::make_shared<ZeroCurve>(curveDates, zeroRates_ql, setup.dayCounter));
+
+    ext::shared_ptr<LiborForwardModelProcess> process(
+        new LiborForwardModelProcess(config.size, index));
+    process->setCovarParam(ext::shared_ptr<LfmCovarianceParameterization>(
+        new LfmCovarianceProxy(
+            ext::make_shared<LmLinearExponentialVolatilityModel>(
+                process->fixingTimes(), 0.291, 1.483, 0.116, 0.00001),
+            ext::make_shared<LmExponentialCorrelationModel>(config.size, 0.5))));
+
+    // ========================================================================
+    // Get swap rate (using OIS curve for discounting)
+    // ========================================================================
+    ext::shared_ptr<VanillaSwap> fwdSwap(
+        new VanillaSwap(Swap::Receiver, 1.0,
+                        setup.schedule, 0.05, setup.dayCounter,
+                        setup.schedule, index, 0.0, index->dayCounter()));
+    fwdSwap->setPricingEngine(ext::make_shared<DiscountingSwapEngine>(
+        Handle<YieldTermStructure>(discountingCurve)));
+    RealType swapRate = fwdSwap->fairRate();
+
+    Array initRates = process->initialValues();
+
+    // ========================================================================
+    // Extract discount factors and survival probabilities
+    // ========================================================================
+    std::vector<RealType> oisDiscountFactors(config.size);
+    for (Size k = 0; k < config.size; ++k)
+    {
+        Time t = setup.accrualEnd[k];
+        oisDiscountFactors[k] = discountingCurve->discount(t);
+    }
+
+    // Get swaption maturity time for CVA calculation
+    Time swaptionMaturity = setup.accrualStart[config.i_opt];
+    RealType counterpartySurvival = counterpartyCreditCurve->survivalProbability(swaptionMaturity);
+    RealType ownSurvival = ownCreditCurve->survivalProbability(swaptionMaturity);
+
+    // ========================================================================
+    // Pre-compute matrices for each step
+    // ========================================================================
+    std::vector<Matrix> stepDiff(setup.fullGridSteps);
+    std::vector<Matrix> stepCov(setup.fullGridSteps);
+    std::vector<Size> stepM(setup.fullGridSteps);
+    std::vector<Real> stepDt(setup.fullGridSteps);
+    std::vector<Real> stepSdt(setup.fullGridSteps);
+
+    for (Size step = 1; step <= setup.fullGridSteps; ++step)
+    {
+        Time t0 = setup.grid[step - 1];
+        stepDiff[step - 1] = process->covarParam()->diffusion(t0, Array());
+        stepCov[step - 1] = process->covarParam()->covariance(t0, Array());
+        stepM[step - 1] = process->nextIndexReset(t0);
+        stepDt[step - 1] = setup.grid.dt(step - 1);
+        stepSdt[step - 1] = std::sqrt(stepDt[step - 1]);
+    }
+
+    // Get accrual times from process
+    const std::vector<Time>& accrualStart = process->accrualStartTimes();
+    const std::vector<Time>& accrualEnd = process->accrualEndTimes();
+
+    // ========================================================================
+    // Monte Carlo simulation
+    // ========================================================================
+    RealType price = RealType(0.0);
+    for (Size n = 0; n < nrTrails; ++n)
+    {
+        Array asset(config.size);
+        for (Size k = 0; k < config.size; ++k)
+            asset[k] = initRates[k];
+
+        Array assetAtExercise(config.size);
+        for (Size step = 1; step <= setup.fullGridSteps; ++step)
+        {
+            Size offset = (step - 1) * setup.numFactors;
+
+            Array dw(setup.numFactors);
+            for (Size f = 0; f < setup.numFactors; ++f)
+                dw[f] = setup.allRandoms[n][offset + f];
+
+            evolveWithMatrices(asset, stepDiff[step - 1], stepCov[step - 1],
+                               accrualStart, accrualEnd, stepM[step - 1],
+                               stepSdt[step - 1], stepDt[step - 1], dw);
+
+            if (step == setup.exerciseStep)
+            {
+                for (Size k = 0; k < config.size; ++k)
+                    assetAtExercise[k] = asset[k];
+            }
+        }
+
+        // NPV calculation using OIS discount factors
+        RealType npv = RealType(0.0);
+        for (Size m = config.i_opt; m < config.i_opt + config.j_opt; ++m)
+        {
+            RealType accrual = setup.accrualEnd[m] - setup.accrualStart[m];
+            npv += (swapRate - assetAtExercise[m]) * accrual * oisDiscountFactors[m];
+        }
+
+        // max(npv, 0)
+        if constexpr (std::is_same_v<RealType, double>)
+        {
+            price += std::max(npv, 0.0);
+        }
+        else
+        {
+            if (value(npv) > 0.0)
+                price += npv;
+        }
+    }
+
+    RealType swaptionNPV = price / RealType(static_cast<double>(nrTrails));
+
+    // ========================================================================
+    // CVA Adjustment
+    // Simple unilateral CVA: CVA = (1 - S_C) * (1 - R_C) * EPE
+    // where S_C = counterparty survival probability, R_C = recovery rate
+    // EPE = Expected Positive Exposure (here approximated by swaption NPV for positive NPV)
+    // DVA (own credit) similarly: DVA = (1 - S_O) * (1 - R_O) * ENE
+    // For a receiver swaption held by us, CVA applies when NPV > 0
+    // ========================================================================
+    RealType cva = swaptionNPV * (RealType(1.0) - counterpartySurvival) * (RealType(1.0) - config.counterpartyRecovery);
+    RealType dva = swaptionNPV * (RealType(1.0) - ownSurvival) * (RealType(1.0) - config.ownRecovery);
+
+    // CVA-adjusted price: NPV - CVA + DVA
+    // (CVA is a cost, DVA is a benefit)
+    return swaptionNPV - cva + dva;
 }
 
 } // namespace benchmark
