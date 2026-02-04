@@ -140,6 +140,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DXAD_WARNINGS_PARANOID=OFF \
+            -DXAD_USE_STRONG_INLINE=ON \
+            -DXAD_NO_THREADLOCAL=ON \
+            -DXAD_SIMD_OPTION=AVX2 \
             -DXAD_ENABLE_JIT=ON \
             -DCMAKE_PREFIX_PATH=$(pwd)/../install \
             -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../xad-forge;$(pwd)/../QuantLib-Risks-Cpp" \
@@ -212,6 +215,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DXAD_WARNINGS_PARANOID=OFF \
+            -DXAD_USE_STRONG_INLINE=ON \
+            -DXAD_NO_THREADLOCAL=ON \
+            -DXAD_SIMD_OPTION=AVX2 \
             -DXAD_ENABLE_JIT=OFF \
             -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../QuantLib-Risks-Cpp" \
             -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
@@ -592,6 +598,9 @@ jobs:
             -DCMAKE_CXX_STANDARD=17 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DXAD_WARNINGS_PARANOID=OFF ^
+            -DXAD_USE_STRONG_INLINE=ON ^
+            -DXAD_NO_THREADLOCAL=ON ^
+            -DXAD_SIMD_OPTION=AVX2 ^
             -DXAD_ENABLE_JIT=ON ^
             -DXAD_STATIC_MSVC_RUNTIME=ON ^
             -DCMAKE_PREFIX_PATH=%CD%\..\install ^
@@ -677,6 +686,9 @@ jobs:
             -DCMAKE_CXX_STANDARD=17 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DXAD_WARNINGS_PARANOID=OFF ^
+            -DXAD_USE_STRONG_INLINE=ON ^
+            -DXAD_NO_THREADLOCAL=ON ^
+            -DXAD_SIMD_OPTION=AVX2 ^
             -DXAD_ENABLE_JIT=OFF ^
             -DXAD_STATIC_MSVC_RUNTIME=ON ^
             -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\QuantLib-Risks-Cpp" ^
