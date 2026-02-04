@@ -350,9 +350,10 @@ inline void printValidationComparison(
     // Display names
     auto displayName = [](const std::string& m) -> std::string {
         if (m == "FDAREAL") return "FD-AReal";
-        if (m == "XADSPLIT") return "XAD-Split";
-        if (m == "JITAVX") return "Forge-AVX2";
-        if (m == "JIT") return "Forge";
+        if (m == "XADFULL") return "XAD-Full";
+        if (m == "XAD") return "XAD";
+        if (m == "FORGEAVX") return "Forge-AVX";
+        if (m == "FORGE") return "Forge";
         return m;
     };
 
@@ -372,7 +373,7 @@ inline void printValidationComparison(
     std::cout << "  --------------------------------------------------------------------------\n";
 
     // Method order
-    std::vector<std::string> order = {"FD", "FDAREAL", "XAD", "XADSPLIT", "JIT", "JITAVX"};
+    std::vector<std::string> order = {"FD", "FDAREAL", "XADFULL", "XAD", "FORGE", "FORGEAVX"};
     for (const auto& m : order)
     {
         const ValidationResult* r = nullptr;
@@ -492,10 +493,10 @@ inline void printBenchmarkHeader(const BenchmarkConfig& config, int benchmarkNum
     std::cout << "--------------------------------------------------------------------------------\n";
     std::cout << "  FD        Finite Differences (bump-and-revalue, paths <= " << FD_MAX_PATHS << " only)\n";
     std::cout << "  FD-AReal  Finite Differences with AReal type (measures AReal overhead, no AAD)\n";
-    std::cout << "  XAD       XAD tape-based reverse-mode AAD\n";
-    std::cout << "  XAD-Split XAD with decoupled Jacobian + chain rule (no JIT)\n";
-    std::cout << "  JIT       Forge JIT-compiled native code\n";
-    std::cout << "  JIT-AVX   Forge JIT + AVX2 SIMD (4 paths/instruction)\n";
+    std::cout << "  XAD-Full  XAD tape-based reverse-mode AAD (full tape)\n";
+    std::cout << "  XAD       XAD with decoupled Jacobian + chain rule (optimized)\n";
+    std::cout << "  Forge     Forge JIT-compiled native code\n";
+    std::cout << "  Forge-AVX Forge JIT + AVX2 SIMD (4 paths/instruction)\n";
     std::cout << "\n";
 }
 
@@ -586,10 +587,10 @@ inline void printResultsTable(const std::vector<TimingResult>& results)
 
         printRow("FD", r.fd_mean, r.fd_std, r.fd_enabled);
         printRow("FD-AReal", r.fd_areal_mean, r.fd_areal_std, r.fd_areal_enabled);
-        printRow("XAD", r.xad_mean, r.xad_std, r.xad_enabled);
-        printRow("XAD-Split", r.xad_split_mean, r.xad_split_std, r.xad_split_enabled, r.xad_split_fixed_mean, true);
-        printRow("JIT", r.jit_mean, r.jit_std, r.jit_enabled, r.jit_fixed_mean, true);
-        printRow("JIT-AVX", r.jit_avx_mean, r.jit_avx_std, r.jit_avx_enabled, r.jit_fixed_mean, true);
+        printRow("XAD-Full", r.xad_mean, r.xad_std, r.xad_enabled);
+        printRow("XAD", r.xad_split_mean, r.xad_split_std, r.xad_split_enabled, r.xad_split_fixed_mean, true);
+        printRow("Forge", r.jit_mean, r.jit_std, r.jit_enabled, r.jit_fixed_mean, true);
+        printRow("Forge-AVX", r.jit_avx_mean, r.jit_avx_std, r.jit_avx_enabled, r.jit_fixed_mean, true);
 
         // Separator between path count groups
         if (i < results.size() - 1)
@@ -607,11 +608,11 @@ inline void printResultsTable(const std::vector<TimingResult>& results)
 
     std::cout << "\n";
     std::cout << "  All times in milliseconds (ms).\n";
-    std::cout << "  Speedup = FD / Method (or XAD / Method when FD not available).\n";
+    std::cout << "  Speedup = FD / Method (or XAD-Full / Method when FD not available).\n";
     if (hasFixedCost)
     {
         std::cout << "\n";
-        std::cout << "  * Setup = one-time cost for XAD-Split/JIT methods (curve bootstrap + Jacobian).\n";
+        std::cout << "  * Setup = one-time cost for XAD/Forge methods (curve bootstrap + Jacobian).\n";
         std::cout << "    This cost is constant regardless of path count. The remaining time scales with paths.\n";
     }
     std::cout << "\n";

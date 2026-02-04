@@ -2,14 +2,14 @@
 #
 #  QuantLib-Risks Benchmarks
 #
-#  Comprehensive benchmark comparing FD vs XAD vs Forge JIT
+#  Comprehensive benchmark comparing FD vs XAD vs Forge
 #
 #  Structure:
 #  - Two jobs: Linux and Windows
 #  - Each job builds 3 versions on SAME hardware for fair comparison:
-#    1. Plain double QuantLib (for FD)
-#    2. XAD (JIT disabled) for XAD tape AAD
-#    3. XAD + Forge (JIT enabled) for JIT/JIT-AVX AAD
+#    1. Plain double QuantLib (for FD baseline)
+#    2. XAD (JIT disabled) for XAD-Full and XAD (Jacobian splitting)
+#    3. XAD + Forge (JIT enabled) for Forge and Forge-AVX
 #
 #  Jobs:
 #  - Linux, QL + XAD + Forge:   Full benchmark suite on Linux
@@ -164,14 +164,14 @@ jobs:
 
       - name: Run Forge Benchmark (JIT on)
         run: |
-          echo "===== FORGE BENCHMARK (XAD + Forge JIT) ====="
+          echo "===== FORGE BENCHMARK (Forge + Forge-AVX) ====="
           cd QuantLib/build-forge
           export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
           ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all 2>&1 | tee forge_results.txt
 
-      - name: Run XAD-Split vs JIT Diagnostic
+      - name: Run XAD vs Forge Diagnostic
         run: |
-          echo "===== DIAGNOSTIC: XAD-Split vs Forge Derivative Comparison ====="
+          echo "===== DIAGNOSTIC: XAD vs Forge Derivative Comparison ====="
           cd QuantLib/build-forge
           export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
           ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --diagnose --diagnose-paths=100 2>&1 | tee diagnostic_results.txt
@@ -235,7 +235,7 @@ jobs:
 
       - name: Run XAD Benchmark (JIT off)
         run: |
-          echo "===== XAD BENCHMARK (XAD + XAD-Split, JIT disabled) ====="
+          echo "===== XAD BENCHMARK (XAD-Full + XAD) ====="
           cd QuantLib/build-xad
           ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all --xad-only 2>&1 | tee xad_results.txt
 
@@ -249,6 +249,14 @@ jobs:
           echo "================================================================================"
           echo ""
           echo "All benchmarks ran on the same hardware for fair comparison."
+          echo ""
+          echo "Raw data (for parsing):"
+          echo ""
+          grep -E "^(FD_|VALIDATE_)" QuantLib/build-double/fd_results.txt 2>/dev/null || true
+          grep -E "^(XADFULL_|XAD_|VALIDATE_)" QuantLib/build-xad/xad_results.txt 2>/dev/null || true
+          grep -E "^(FORGE_|FORGEAVX_|FORGE_PHASES_|VALIDATE_)" QuantLib/build-forge/forge_results.txt 2>/dev/null || true
+          echo ""
+          echo "================================================================================"
           echo ""
 
           # Create a Python script to parse and format results
@@ -275,8 +283,8 @@ jobs:
               return method, config, results
 
           def parse_phases_line(line):
-              """Parse JIT_PHASES_CONFIG:p1,p2,p3"""
-              match = re.match(r'^JIT_PHASES_(\w+):(.+)$', line.strip())
+              """Parse FORGE_PHASES_CONFIG:p1,p2,p3"""
+              match = re.match(r'^FORGE_PHASES_(\w+):(.+)$', line.strip())
               if not match:
                   return None
               config, data = match.groups()
@@ -306,43 +314,12 @@ jobs:
                   return f"{p//1000}K"
               return str(p)
 
-          def parse_validation_line(line):
-              """Parse a line like 'VALIDATE_CONFIG_METHOD:pv;sens1,sens2,...'"""
-              match = re.match(r'^VALIDATE_(\w+)_(\w+):(.+)$', line.strip())
-              if not match:
-                  return None
-              config, method, data = match.groups()
-              parts = data.split(';')
-              if len(parts) != 2:
-                  return None
-              pv = float(parts[0])
-              sens = [float(x) for x in parts[1].split(',') if x]
-              return config, method, pv, sens
-
-          def compare_sensitivities(sens1, sens2, tol_pct):
-              """Compare two sensitivity vectors, return (matching_count, total, max_rel_diff)"""
-              if len(sens1) != len(sens2):
-                  return 0, max(len(sens1), len(sens2)), float('inf')
-              matching = 0
-              max_diff = 0.0
-              for s1, s2 in zip(sens1, sens2):
-                  if abs(s1) < 1e-12 and abs(s2) < 1e-12:
-                      matching += 1
-                      continue
-                  base = max(abs(s1), abs(s2))
-                  rel_diff = abs(s1 - s2) / base if base > 1e-12 else 0.0
-                  max_diff = max(max_diff, rel_diff)
-                  if rel_diff <= tol_pct / 100.0:
-                      matching += 1
-              return matching, len(sens1), max_diff * 100.0  # return as percentage
-
           # Read all result files
           data = defaultdict(lambda: defaultdict(dict))  # data[config][method][paths] = {mean, fixed}
           phases = {}  # phases[config] = {phase1, phase2, phase3}
-          validation = defaultdict(dict)  # validation[config][method] = (pv, sens)
 
           for filepath in sys.argv[1:]:
-              # Skip XADSPLIT from forge_results.txt (use xad_results.txt instead for fair comparison)
+              # Skip XAD from forge_results.txt (use xad_results.txt instead for fair comparison)
               is_forge_results = 'forge_results' in filepath
               try:
                   with open(filepath) as f:
@@ -350,8 +327,8 @@ jobs:
                           result = parse_line(line)
                           if result:
                               method, config, results = result
-                              # Use XADSPLIT from xad_results.txt, not forge_results.txt
-                              if is_forge_results and method == 'XADSPLIT':
+                              # Use XAD from xad_results.txt, not forge_results.txt
+                              if is_forge_results and method == 'XAD':
                                   continue
                               for paths, vals in results.items():
                                   data[config][method][paths] = vals
@@ -359,152 +336,58 @@ jobs:
                           if phase_result:
                               config, phase_data = phase_result
                               phases[config] = phase_data
-                          val_result = parse_validation_line(line)
-                          if val_result:
-                              config, method, pv, sens = val_result
-                              validation[config][method] = (pv, sens)
               except FileNotFoundError:
                   pass
 
-          # Print tables for each config
-          configs = ['LITE', 'LITEEXT', 'PRODUCTION']
-          config_names = {
-              'LITE': 'Lite (1Y×1Y, 9 inputs)',
-              'LITEEXT': 'Lite-Extended (5Y×5Y, 14 inputs)',
-              'PRODUCTION': 'Production (5Y×5Y dual-curve, 45 inputs)'
-          }
+          # Generate side-by-side summary table (Production vs CVA)
+          print("SUMMARY TABLE (all times in ms)")
+          print("")
+          print("  | Paths  |    Method |  45 inputs |  90 inputs |")
+          print("  |--------|-----------|------------|------------|")
 
-          # Column display names (asterisk indicates methods with setup cost)
-          method_display = {'FD': 'FD', 'XAD': 'XAD', 'XADSPLIT': 'XAD-Split*', 'JIT': 'Forge*', 'JITAVX': 'Forge-AVX2*'}
-          col_width = 12  # Width for each numeric column
+          path_counts = [1000, 10000, 100000]
+          methods_to_show = ['FD', 'XAD', 'FORGEAVX']
+          method_display = {'FD': 'FD', 'XAD': 'XAD', 'FORGEAVX': 'Forge-AVX'}
 
-          for config in configs:
-              if config not in data:
-                  continue
+          for i, paths in enumerate(path_counts):
+              for j, method in enumerate(methods_to_show):
+                  # Get values for PRODUCTION (45 inputs) and CVA (90 inputs)
+                  prod_val = data.get('PRODUCTION', {}).get(method, {}).get(paths, {})
+                  cva_val = data.get('CVA', {}).get(method, {}).get(paths, {})
 
-              print(f"\n### {config_names.get(config, config)}\n")
-              methods = data[config]
-              all_paths = sorted(set(p for m in methods.values() for p in m.keys()))
+                  prod_str = format_num(prod_val['mean']) if prod_val else '-'
+                  cva_str = format_num(cva_val['mean']) if cva_val else '-'
 
-              if not all_paths:
-                  continue
+                  path_col = format_paths(paths) if j == 0 else ''
+                  print(f"  | {path_col:>6} | {method_display[method]:>9} | {prod_str:>10} | {cva_str:>10} |")
 
-              # Build header (no JIT-Setup column in main table)
-              method_order = ['FD', 'XAD', 'XADSPLIT', 'JIT', 'JITAVX']
-              present_methods = [m for m in method_order if m in methods]
+              # Separator between path count groups (except after last)
+              if i < len(path_counts) - 1:
+                  print("  |--------+-----------+------------+------------|")
 
-              header = f"{'Paths':>6}"
-              for m in present_methods:
-                  header += f"{method_display[m]:>{col_width}}"
-              print(header)
+          print("")
+          print("  Notes:")
+          print("  - XAD uses Jacobian splitting for O(1) scaling with inputs")
+          print("  - Forge uses XAD for curve bootstrap + Jacobian, then JIT compiles the graph")
+          print("  - Forge-AVX adds AVX2 vectorization (4 paths at a time)")
+          print("  - FD = Finite Differences baseline (O(n) scaling with inputs)")
 
-              # Separator line
-              sep = "-" * len(header)
-              print(sep)
-
-              # Data rows
-              for paths in all_paths:
-                  row = f"{format_paths(paths):>6}"
-                  for m in present_methods:
-                      val = methods[m].get(paths)
-                      if val:
-                          row += f"{format_num(val['mean']):>{col_width}}"
-                      else:
-                          row += f"{'-':>{col_width}}"
-                  print(row)
-
-              # Print JIT phase breakdown table if available
-              if config in phases:
-                  p = phases[config]
-                  total = p['phase1'] + p['phase2'] + p['phase3']
-                  print(f"\n*Forge JIT setup (one-time costs, independent of paths):\n")
-                  print(f"  {'Phase':<35} {'Time (ms)':>10}")
-                  print(f"  {'-'*45}")
-                  print(f"  {'1. Curve bootstrap (XAD)':<35} {format_num(p['phase1']):>10}")
-                  print(f"  {'2. Jacobian (XAD adjoints)':<35} {format_num(p['phase2']):>10}")
-                  print(f"  {'3. JIT graph record + compile':<35} {format_num(p['phase3']):>10}")
-                  print(f"  {'-'*45}")
-                  print(f"  {'Total setup':<35} {format_num(total):>10}")
-
-              # Print validation table if we have validation data for this config
-              if config in validation and validation[config]:
-                  val_methods = validation[config]
-                  print(f"\nValidation (at 10K paths):\n")
-                  print(f"  {'Method':<10} {'PV':>14} {'Sens':>6} {'vs FD':>8} {'FD MaxDiff':>12} {'vs XAD':>8} {'XAD MaxDiff':>12}")
-                  print(f"  {'-'*72}")
-
-                  method_order = ['FD', 'XAD', 'XADSPLIT', 'JIT', 'JITAVX']
-                  fd_sens = val_methods.get('FD', (None, []))[1]
-                  xad_sens = val_methods.get('XAD', (None, []))[1]
-
-                  # Display names for validation table (without asterisk)
-                  val_display = {'FD': 'FD', 'XAD': 'XAD', 'XADSPLIT': 'XAD-Split', 'JIT': 'Forge', 'JITAVX': 'Forge-AVX2'}
-
-                  for m in method_order:
-                      if m not in val_methods:
-                          continue
-                      pv, sens = val_methods[m]
-
-                      # Compare vs FD (1% tolerance)
-                      if m == 'FD':
-                          vs_fd = '-'
-                          fd_maxdiff = '-'
-                      elif fd_sens:
-                          match, total, maxd = compare_sensitivities(sens, fd_sens, 1.0)
-                          vs_fd = f"{match}/{total}"
-                          fd_maxdiff = f"{maxd:.2f}%"
-                      else:
-                          vs_fd = '-'
-                          fd_maxdiff = '-'
-
-                      # Compare vs XAD (0.01% tolerance)
-                      if m in ('FD', 'XAD'):
-                          vs_xad = '-'
-                          xad_maxdiff = '-'
-                      elif xad_sens:
-                          match, total, maxd = compare_sensitivities(sens, xad_sens, 0.01)
-                          vs_xad = f"{match}/{total}"
-                          xad_maxdiff = f"{maxd:.4f}%"
-                      else:
-                          vs_xad = '-'
-                          xad_maxdiff = '-'
-
-                      print(f"  {val_display[m]:<10} {pv:>14.6f} {len(sens):>6} {vs_fd:>8} {fd_maxdiff:>12} {vs_xad:>8} {xad_maxdiff:>12}")
-
-          # Determine which methods are present across all configs
-          all_methods = set()
-          for config in configs:
-              if config in data:
-                  all_methods.update(data[config].keys())
-
-          print("\nAll times in milliseconds (ms).")
-          has_jit = 'JIT' in all_methods or 'JITAVX' in all_methods
-          has_xadsplit = 'XADSPLIT' in all_methods
-          if has_jit and has_xadsplit:
-              print("*Forge uses the Forge JIT compiler to generate native code (scalar, 1 path at a time).")
-              print(" Forge-AVX2 uses AVX2 vectorization (4 paths at a time). See setup breakdown above.")
-              print(" XAD-Split computes Jacobian separately and re-records a small tape per path (no JIT).")
-          elif has_xadsplit:
-              print("*XAD-Split computes the Jacobian separately and re-records a small tape per path,")
-              print(" avoiding one large tape that records all MC paths.")
-          elif has_jit:
-              print("*Forge uses the Forge JIT compiler (scalar, 1 path at a time).")
-              print(" Forge-AVX2 uses AVX2 vectorization (4 paths at a time). See setup breakdown above.")
+          # Print Forge phase breakdown if available
+          if 'PRODUCTION' in phases:
+              p = phases['PRODUCTION']
+              total = p['phase1'] + p['phase2'] + p['phase3']
+              print("")
+              print("  Forge setup breakdown (one-time cost):")
+              print(f"    Curve bootstrap: {format_num(p['phase1'])} ms")
+              print(f"    Jacobian:        {format_num(p['phase2'])} ms")
+              print(f"    JIT compile:     {format_num(p['phase3'])} ms")
+              print(f"    Total:           {format_num(total)} ms")
           PYEOF
 
           python3 format_results.py \
             QuantLib/build-double/fd_results.txt \
             QuantLib/build-xad/xad_results.txt \
             QuantLib/build-forge/forge_results.txt
-
-          echo ""
-          echo "================================================================================"
-          echo ""
-          echo "Raw data (for parsing):"
-          echo ""
-          grep -E "^(FD_|VALIDATE_)" QuantLib/build-double/fd_results.txt 2>/dev/null || true
-          grep -E "^(XAD_|XADSPLIT_|VALIDATE_)" QuantLib/build-xad/xad_results.txt 2>/dev/null || true
-          grep -E "^(JIT_|JITAVX_|JIT_PHASES_|VALIDATE_)" QuantLib/build-forge/forge_results.txt 2>/dev/null || true
 
       - name: Upload Results
         uses: actions/upload-artifact@v4
@@ -626,16 +509,16 @@ jobs:
       - name: Run Forge Benchmark (JIT on)
         shell: cmd
         run: |
-          echo ===== FORGE BENCHMARK (XAD + Forge JIT) =====
+          echo ===== FORGE BENCHMARK (Forge + Forge-AVX) =====
           cd QuantLib\build-forge
           set PATH=%CD%\..\..\install\bin;%PATH%
           QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all > forge_results.txt 2>&1
           type forge_results.txt
 
-      - name: Run XAD-Split vs JIT Diagnostic
+      - name: Run XAD vs Forge Diagnostic
         shell: cmd
         run: |
-          echo ===== DIAGNOSTIC: XAD-Split vs Forge Derivative Comparison =====
+          echo ===== DIAGNOSTIC: XAD vs Forge Derivative Comparison =====
           cd QuantLib\build-forge
           set PATH=%CD%\..\..\install\bin;%PATH%
           QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --diagnose --diagnose-paths=100 > diagnostic_results.txt 2>&1
@@ -710,7 +593,7 @@ jobs:
       - name: Run XAD Benchmark (JIT off)
         shell: cmd
         run: |
-          echo ===== XAD BENCHMARK (XAD + XAD-Split, JIT disabled) =====
+          echo ===== XAD BENCHMARK (XAD-Full + XAD) =====
           cd QuantLib\build-xad
           QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all --xad-only > xad_results.txt 2>&1
           type xad_results.txt
@@ -726,6 +609,14 @@ jobs:
           Write-Host "================================================================================"
           Write-Host ""
           Write-Host "All benchmarks ran on the same hardware for fair comparison."
+          Write-Host ""
+          Write-Host "Raw data (for parsing):"
+          Write-Host ""
+          Get-Content QuantLib/build-double/fd_results.txt 2>$null | Select-String "^(FD_|VALIDATE_)"
+          Get-Content QuantLib/build-xad/xad_results.txt 2>$null | Select-String "^(XADFULL_|XAD_|VALIDATE_)"
+          Get-Content QuantLib/build-forge/forge_results.txt 2>$null | Select-String "^(FORGE_|FORGEAVX_|FORGE_PHASES_|VALIDATE_)"
+          Write-Host ""
+          Write-Host "================================================================================"
           Write-Host ""
 
           $script = @'
@@ -750,7 +641,7 @@ jobs:
               return method, config, results
 
           def parse_phases_line(line):
-              match = re.match(r'^JIT_PHASES_(\w+):(.+)$', line.strip())
+              match = re.match(r'^FORGE_PHASES_(\w+):(.+)$', line.strip())
               if not match:
                   return None
               config, data = match.groups()
@@ -769,39 +660,9 @@ jobs:
               if p >= 1000: return f"{p//1000}K"
               return str(p)
 
-          def parse_validation_line(line):
-              match = re.match(r'^VALIDATE_(\w+)_(\w+):(.+)$', line.strip())
-              if not match:
-                  return None
-              config, method, data = match.groups()
-              parts = data.split(';')
-              if len(parts) != 2:
-                  return None
-              pv = float(parts[0])
-              sens = [float(x) for x in parts[1].split(',') if x]
-              return config, method, pv, sens
-
-          def compare_sensitivities(sens1, sens2, tol_pct):
-              if len(sens1) != len(sens2):
-                  return 0, max(len(sens1), len(sens2)), float('inf')
-              matching = 0
-              max_diff = 0.0
-              for s1, s2 in zip(sens1, sens2):
-                  if abs(s1) < 1e-12 and abs(s2) < 1e-12:
-                      matching += 1
-                      continue
-                  base = max(abs(s1), abs(s2))
-                  rel_diff = abs(s1 - s2) / base if base > 1e-12 else 0.0
-                  max_diff = max(max_diff, rel_diff)
-                  if rel_diff <= tol_pct / 100.0:
-                      matching += 1
-              return matching, len(sens1), max_diff * 100.0
-
           data = defaultdict(lambda: defaultdict(dict))
           phases = {}
-          validation = defaultdict(dict)
           for filepath in sys.argv[1:]:
-              # Skip XADSPLIT from forge_results.txt (use xad_results.txt instead)
               is_forge_results = 'forge_results' in filepath
               try:
                   with open(filepath) as f:
@@ -809,7 +670,7 @@ jobs:
                           result = parse_line(line)
                           if result:
                               method, config, results = result
-                              if is_forge_results and method == 'XADSPLIT':
+                              if is_forge_results and method == 'XAD':
                                   continue
                               for paths, vals in results.items():
                                   data[config][method][paths] = vals
@@ -817,102 +678,47 @@ jobs:
                           if phase_result:
                               config, phase_data = phase_result
                               phases[config] = phase_data
-                          val_result = parse_validation_line(line)
-                          if val_result:
-                              config, method, pv, sens = val_result
-                              validation[config][method] = (pv, sens)
               except: pass
 
-          configs = ['LITE', 'LITEEXT', 'PRODUCTION']
-          names = {'LITE': 'Lite (1Y×1Y, 9 inputs)', 'LITEEXT': 'Lite-Extended (5Y×5Y, 14 inputs)', 'PRODUCTION': 'Production (5Y×5Y dual-curve, 45 inputs)'}
-          method_display = {'FD': 'FD', 'XAD': 'XAD', 'XADSPLIT': 'XAD-Split*', 'JIT': 'Forge*', 'JITAVX': 'Forge-AVX2*'}
-          col_width = 12
+          print("SUMMARY TABLE (all times in ms)")
+          print("")
+          print("  | Paths  |    Method |  45 inputs |  90 inputs |")
+          print("  |--------|-----------|------------|------------|")
 
-          for config in configs:
-              if config not in data: continue
-              print(f"\n### {names.get(config, config)}\n")
-              methods = data[config]
-              all_paths = sorted(set(p for m in methods.values() for p in m.keys()))
-              if not all_paths: continue
+          path_counts = [1000, 10000, 100000]
+          methods_to_show = ['FD', 'XAD', 'FORGEAVX']
+          method_display = {'FD': 'FD', 'XAD': 'XAD', 'FORGEAVX': 'Forge-AVX'}
 
-              method_order = ['FD', 'XAD', 'XADSPLIT', 'JIT', 'JITAVX']
-              present = [m for m in method_order if m in methods]
+          for i, paths in enumerate(path_counts):
+              for j, method in enumerate(methods_to_show):
+                  prod_val = data.get('PRODUCTION', {}).get(method, {}).get(paths, {})
+                  cva_val = data.get('CVA', {}).get(method, {}).get(paths, {})
 
-              header = f"{'Paths':>6}"
-              for m in present:
-                  header += f"{method_display[m]:>{col_width}}"
-              print(header)
-              print("-" * len(header))
+                  prod_str = format_num(prod_val['mean']) if prod_val else '-'
+                  cva_str = format_num(cva_val['mean']) if cva_val else '-'
 
-              for paths in all_paths:
-                  row = f"{format_paths(paths):>6}"
-                  for m in present:
-                      v = methods[m].get(paths)
-                      if v:
-                          row += f"{format_num(v['mean']):>{col_width}}"
-                      else:
-                          row += f"{'-':>{col_width}}"
-                  print(row)
+                  path_col = format_paths(paths) if j == 0 else ''
+                  print(f"  | {path_col:>6} | {method_display[method]:>9} | {prod_str:>10} | {cva_str:>10} |")
 
-              if config in phases:
-                  p = phases[config]
-                  total = p['phase1'] + p['phase2'] + p['phase3']
-                  print(f"\n*Forge JIT setup (one-time costs, independent of paths):\n")
-                  print(f"  {'Phase':<35} {'Time (ms)':>10}")
-                  print(f"  {'-'*45}")
-                  print(f"  {'1. Curve bootstrap (XAD)':<35} {format_num(p['phase1']):>10}")
-                  print(f"  {'2. Jacobian (XAD adjoints)':<35} {format_num(p['phase2']):>10}")
-                  print(f"  {'3. JIT graph record + compile':<35} {format_num(p['phase3']):>10}")
-                  print(f"  {'-'*45}")
-                  print(f"  {'Total setup':<35} {format_num(total):>10}")
+              if i < len(path_counts) - 1:
+                  print("  |--------+-----------+------------+------------|")
 
-              if config in validation and validation[config]:
-                  val_methods = validation[config]
-                  print(f"\nValidation (at 10K paths):\n")
-                  print(f"  {'Method':<10} {'PV':>14} {'Sens':>6} {'vs FD':>8} {'FD MaxDiff':>12} {'vs XAD':>8} {'XAD MaxDiff':>12}")
-                  print(f"  {'-'*72}")
-                  method_order = ['FD', 'XAD', 'XADSPLIT', 'JIT', 'JITAVX']
-                  val_display = {'FD': 'FD', 'XAD': 'XAD', 'XADSPLIT': 'XAD-Split', 'JIT': 'Forge', 'JITAVX': 'Forge-AVX2'}
-                  fd_sens = val_methods.get('FD', (None, []))[1]
-                  xad_sens = val_methods.get('XAD', (None, []))[1]
-                  for m in method_order:
-                      if m not in val_methods: continue
-                      pv, sens = val_methods[m]
-                      if m == 'FD':
-                          vs_fd, fd_maxdiff = '-', '-'
-                      elif fd_sens:
-                          match, total, maxd = compare_sensitivities(sens, fd_sens, 1.0)
-                          vs_fd, fd_maxdiff = f"{match}/{total}", f"{maxd:.2f}%"
-                      else:
-                          vs_fd, fd_maxdiff = '-', '-'
-                      if m in ('FD', 'XAD'):
-                          vs_xad, xad_maxdiff = '-', '-'
-                      elif xad_sens:
-                          match, total, maxd = compare_sensitivities(sens, xad_sens, 0.01)
-                          vs_xad, xad_maxdiff = f"{match}/{total}", f"{maxd:.4f}%"
-                      else:
-                          vs_xad, xad_maxdiff = '-', '-'
-                      print(f"  {val_display[m]:<10} {pv:>14.6f} {len(sens):>6} {vs_fd:>8} {fd_maxdiff:>12} {vs_xad:>8} {xad_maxdiff:>12}")
+          print("")
+          print("  Notes:")
+          print("  - XAD uses Jacobian splitting for O(1) scaling with inputs")
+          print("  - Forge uses XAD for curve bootstrap + Jacobian, then JIT compiles the graph")
+          print("  - Forge-AVX adds AVX2 vectorization (4 paths at a time)")
+          print("  - FD = Finite Differences baseline (O(n) scaling with inputs)")
 
-          # Determine which methods are present across all configs
-          all_methods = set()
-          for config in configs:
-              if config in data:
-                  all_methods.update(data[config].keys())
-
-          print("\nAll times in milliseconds (ms).")
-          has_jit = 'JIT' in all_methods or 'JITAVX' in all_methods
-          has_xadsplit = 'XADSPLIT' in all_methods
-          if has_jit and has_xadsplit:
-              print("*Forge uses the Forge JIT compiler to generate native code (scalar, 1 path at a time).")
-              print(" Forge-AVX2 uses AVX2 vectorization (4 paths at a time). See setup breakdown above.")
-              print(" XAD-Split computes Jacobian separately and re-records a small tape per path (no JIT).")
-          elif has_xadsplit:
-              print("*XAD-Split computes the Jacobian separately and re-records a small tape per path,")
-              print(" avoiding one large tape that records all MC paths.")
-          elif has_jit:
-              print("*Forge uses the Forge JIT compiler (scalar, 1 path at a time).")
-              print(" Forge-AVX2 uses AVX2 vectorization (4 paths at a time). See setup breakdown above.")
+          if 'PRODUCTION' in phases:
+              p = phases['PRODUCTION']
+              total = p['phase1'] + p['phase2'] + p['phase3']
+              print("")
+              print("  Forge setup breakdown (one-time cost):")
+              print(f"    Curve bootstrap: {format_num(p['phase1'])} ms")
+              print(f"    Jacobian:        {format_num(p['phase2'])} ms")
+              print(f"    JIT compile:     {format_num(p['phase3'])} ms")
+              print(f"    Total:           {format_num(total)} ms")
           '@
 
           $script | Out-File -FilePath format_results.py -Encoding utf8
@@ -920,9 +726,6 @@ jobs:
             QuantLib/build-double/fd_results.txt `
             QuantLib/build-xad/xad_results.txt `
             QuantLib/build-forge/forge_results.txt
-
-          Write-Host ""
-          Write-Host "================================================================================"
 
       - name: Upload Results
         uses: actions/upload-artifact@v4

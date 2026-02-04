@@ -110,7 +110,7 @@ void runXADBenchmarkT(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration (before clearing tape)
         if (validation && iter == 0)
         {
-            validation->method = "XAD";
+            validation->method = "XADFULL";
             validation->pv = value(price);
             validation->sensitivities.resize(config.numMarketQuotes());
             Size q = 0;
@@ -1162,7 +1162,7 @@ void runXADSplitBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data
         if (validation && iter == 0)
         {
-            validation->method = "XADSPLIT";
+            validation->method = "XAD";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1280,7 +1280,7 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
         // Capture validation data
         if (validation && iter == 0)
         {
-            validation->method = "XADSPLIT";
+            validation->method = "XAD";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1671,7 +1671,7 @@ void runJITBenchmarkImpl(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JIT";
+            validation->method = "FORGE";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1810,7 +1810,7 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JITAVX";
+            validation->method = "FORGEAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1920,7 +1920,7 @@ void runJITBenchmarkDualCurveImpl(const BenchmarkConfig& config, const LMMSetup&
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JIT";
+            validation->method = "FORGE";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2095,7 +2095,7 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JITAVX";
+            validation->method = "FORGEAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2283,7 +2283,7 @@ void runJITBenchmarkCVAImpl(const BenchmarkConfig& config, const LMMSetup& setup
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JIT";
+            validation->method = "FORGE";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2464,7 +2464,7 @@ void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "JITAVX";
+            validation->method = "FORGEAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2601,7 +2601,7 @@ void runXADSplitBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setu
         // Capture validation data
         if (validation && iter == 0)
         {
-            validation->method = "XADSPLIT";
+            validation->method = "XAD";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2880,7 +2880,7 @@ void runXADBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration (before clearing tape)
         if (validation && iter == 0)
         {
-            validation->method = "XAD";
+            validation->method = "XADFULL";
             validation->pv = value(price);
             validation->sensitivities.resize(config.numMarketQuotes());
             Size q = 0;
@@ -3019,8 +3019,8 @@ std::vector<TimingResult> runAADBenchmarkCVA(const BenchmarkConfig& config,
 void outputResultsForParsing(const std::vector<TimingResult>& results,
                               const std::string& configId)
 {
-    // XAD results
-    std::cout << "XAD_" << configId << ":";
+    // XAD-Full results (formerly XAD - full tape)
+    std::cout << "XADFULL_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
@@ -3030,8 +3030,8 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     }
     std::cout << std::endl;
 
-    // XAD-Split results (includes fixed cost: mean,std,enabled,fixed_cost)
-    std::cout << "XADSPLIT_" << configId << ":";
+    // XAD results (formerly XAD-Split - optimized with Jacobian + chain rule)
+    std::cout << "XAD_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
@@ -3043,8 +3043,8 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     std::cout << std::endl;
 
 #if defined(QLRISKS_HAS_FORGE)
-    // JIT results (now includes fixed cost: mean,std,enabled,fixed_cost)
-    std::cout << "JIT_" << configId << ":";
+    // Forge results (formerly JIT)
+    std::cout << "FORGE_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
@@ -3055,25 +3055,25 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     }
     std::cout << std::endl;
 
-    // JIT-AVX results (now includes fixed cost: mean,std,enabled,fixed_cost)
-    std::cout << "JITAVX_" << configId << ":";
+    // Forge-AVX results (formerly JITAVX)
+    std::cout << "FORGEAVX_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
         if (i > 0) std::cout << ";";
         std::cout << r.pathCount << "=" << r.jit_avx_mean << "," << r.jit_avx_std
                   << "," << (r.jit_avx_enabled ? "1" : "0")
-                  << "," << r.jit_fixed_mean;  // Same fixed cost as JIT
+                  << "," << r.jit_fixed_mean;  // Same fixed cost as Forge
     }
     std::cout << std::endl;
 
-    // JIT phase breakdown (one-time costs: phase1_curve, phase2_jacobian, phase3_compile)
-    // Output from first result that has JIT enabled (phases are same for all path counts)
+    // Forge phase breakdown (one-time costs: phase1_curve, phase2_jacobian, phase3_compile)
+    // Output from first result that has Forge enabled (phases are same for all path counts)
     for (const auto& r : results)
     {
         if (r.jit_enabled)
         {
-            std::cout << "JIT_PHASES_" << configId << ":"
+            std::cout << "FORGE_PHASES_" << configId << ":"
                       << r.jit_phase1_curve_mean << ","
                       << r.jit_phase2_jacobian_mean << ","
                       << r.jit_phase3_compile_mean << std::endl;
