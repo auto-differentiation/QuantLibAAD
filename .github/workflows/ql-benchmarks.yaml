@@ -504,7 +504,7 @@ jobs:
         run: |
           call "%VSVARSALL%" x64
           cd QuantLib\build-forge
-          cmake --build . --target benchmark_aad
+          cmake --build . --target benchmark_aad -- -j 2
 
       - name: Run Forge Benchmark (JIT on)
         shell: cmd
@@ -588,7 +588,7 @@ jobs:
         run: |
           call "%VSVARSALL%" x64
           cd QuantLib\build-xad
-          cmake --build . --target benchmark_aad
+          cmake --build . --target benchmark_aad -- -j 2
 
       - name: Run XAD Benchmark (JIT off)
         shell: cmd
