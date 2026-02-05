@@ -36,10 +36,10 @@ if(NOT QLRISKS_DISABLE_AAD)
 else()
     target_compile_definitions(QuantLib-Risks INTERFACE QLRISKS_DISABLE_AAD=1)
 endif()
+target_link_libraries(QuantLib-Risks INTERFACE XAD::xad)
 if(MSVC)
     target_compile_options(QuantLib-Risks INTERFACE /bigobj)
 endif()
-target_link_libraries(QuantLib-Risks INTERFACE XAD::xad)
 set_target_properties(QuantLib-Risks PROPERTIES
     EXPORT_NAME QuantLib-Risks
 )

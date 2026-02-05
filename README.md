@@ -18,6 +18,12 @@ This repository contains integration headers, examples, and tests required
 for this integration.
 It is not usable stand-alone.
 
+## JIT Compilation Support
+
+XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios—such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis—XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/xad/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend. The [xad-forge](https://github.com/da-roth/xad-forge) library provides Forge-based backends for this purpose, including vectorized AVX execution. See the [xad-forge README](https://github.com/da-roth/xad-forge#when-to-use-jit) for guidance on when JIT compilation is beneficial.
+
+The repository includes a [swaption benchmark](.github/workflows/ql-benchmarks.yaml) that demonstrates a hybrid workflow: curve bootstrapping with XAD's tape, followed by Monte Carlo pricing with JIT-compiled evaluation, comparing tape-based, JIT, and JIT-AVX performance.
+
 ## Getting Started
 
 For detailed build instructions with [XAD](https://auto-differentiation.github.io) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://auto-differentiation.github.io/quantlib-risks/cxx/).

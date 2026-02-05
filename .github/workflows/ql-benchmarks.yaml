@@ -1,0 +1,737 @@
+##############################################################################
+#
+#  QuantLib-Risks Benchmarks
+#
+#  Comprehensive benchmark comparing FD vs XAD vs Forge
+#
+#  Structure:
+#  - Two jobs: Linux and Windows
+#  - Each job builds 3 versions on SAME hardware for fair comparison:
+#    1. Plain double QuantLib (for FD baseline)
+#    2. XAD (JIT disabled) for XAD-Full and XAD (Jacobian splitting)
+#    3. XAD + Forge (JIT enabled) for Forge and Forge-AVX
+#
+#  Jobs:
+#  - Linux, QL + XAD + Forge:   Full benchmark suite on Linux
+#  - Windows, QL + XAD + Forge: Full benchmark suite on Windows
+#
+#  Dependencies:
+#  - QuantLib (lballabio/QuantLib)
+#  - XAD (auto-differentiation/xad)
+#  - QuantLib-Risks-Cpp (this repo)
+#  - xad-forge (da-roth/xad-forge) [Forge builds]
+#  - Forge C API (da-roth/forge) [Forge builds]
+#
+#  Copyright (C) 2025 Xcelerit Computing Limited
+#  SPDX-License-Identifier: AGPL-3.0-or-later
+#
+##############################################################################
+
+name: QL Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+      - forge
+  pull_request:
+    branches:
+      - main
+      - forge
+  workflow_dispatch:
+
+env:
+  QL_REPO: lballabio/QuantLib
+  QL_BRANCH: master
+  XAD_REPO: auto-differentiation/xad
+  XAD_BRANCH: main
+  FORGE_REPO: da-roth/forge
+  FORGE_BRANCH: main
+  XAD_FORGE_REPO: da-roth/xad-forge
+  XAD_FORGE_BRANCH: main
+
+jobs:
+  ##############################################################################
+  # Linux, QL + XAD + Forge
+  # Comprehensive benchmark: FD (plain double) vs XAD vs Forge JIT
+  ##############################################################################
+  linux-benchmark:
+    name: Linux, QL + XAD + Forge
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/lballabio/quantlib-devenv:rolling
+
+    steps:
+      - name: Hardware Info
+        run: |
+          echo "===== CPU ====="
+          lscpu | grep -E "^(Model name|CPU\(s\)|Thread|Core|Socket|CPU max MHz)"
+          echo "===== Memory ====="
+          free -h
+          echo "===== SIMD ====="
+          cat /proc/cpuinfo | grep flags | head -1 | tr ' ' '\n' | grep -E "^(sse|avx)" | sort -u | tr '\n' ' '
+          echo ""
+
+      - name: Checkout QuantLib
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.QL_REPO }}
+          ref: ${{ env.QL_BRANCH }}
+          path: QuantLib
+
+      - name: Checkout XAD
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_REPO }}
+          ref: ${{ env.XAD_BRANCH }}
+          path: xad
+
+      - name: Checkout Forge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FORGE_REPO }}
+          ref: ${{ env.FORGE_BRANCH }}
+          path: forge
+
+      - name: Checkout xad-forge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_FORGE_REPO }}
+          ref: ${{ env.XAD_FORGE_BRANCH }}
+          path: xad-forge
+
+      - name: Checkout QuantLib-Risks-Cpp
+        uses: actions/checkout@v4
+        with:
+          path: QuantLib-Risks-Cpp
+
+      - name: Setup
+        run: |
+          apt-get update
+          apt-get install -y ninja-build cmake
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.12
+        with:
+          key: linux-benchmark
+          max-size: 1G
+
+      # =========================================================================
+      # Build Forge C API (needed for JIT builds)
+      # =========================================================================
+      - name: Build Forge C API
+        run: |
+          cd forge
+          cmake -B build -S api/c -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFORGE_CAPI_BUILD_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
+          cmake --build build
+          cmake --install build
+
+      # =========================================================================
+      # Benchmark 1: XAD + Forge (JIT enabled) - Run first (longest build)
+      # =========================================================================
+      - name: Configure QuantLib (XAD + Forge)
+        run: |
+          cd QuantLib
+          cmake -B build-forge -G Ninja -DBOOST_ROOT=/usr \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DXAD_WARNINGS_PARANOID=OFF \
+            -DXAD_USE_STRONG_INLINE=ON \
+            -DXAD_NO_THREADLOCAL=ON \
+            -DXAD_SIMD_OPTION=AVX2 \
+            -DXAD_ENABLE_JIT=ON \
+            -DCMAKE_PREFIX_PATH=$(pwd)/../install \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../xad-forge;$(pwd)/../QuantLib-Risks-Cpp" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_NULL_AS_FUNCTIONS=ON \
+            -DQL_BUILD_TEST_SUITE=OFF \
+            -DQL_BUILD_EXAMPLES=OFF \
+            -DQL_BUILD_BENCHMARK=OFF \
+            -DQLRISKS_DISABLE_AAD=OFF \
+            -DQLRISKS_ENABLE_FORGE=ON \
+            -DQLRISKS_USE_FORGE_CAPI=ON \
+            -DXAD_FORGE_USE_CAPI=ON \
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+
+      - name: Build Forge benchmark (JIT on)
+        run: |
+          cd QuantLib/build-forge
+          cmake --build . --target benchmark_aad
+
+      - name: Run Forge Benchmark (JIT on)
+        run: |
+          echo "===== FORGE BENCHMARK (Forge + Forge-AVX) ====="
+          cd QuantLib/build-forge
+          export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
+          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all 2>&1 | tee forge_results.txt
+
+      - name: Run XAD vs Forge Diagnostic
+        run: |
+          echo "===== DIAGNOSTIC: XAD vs Forge Derivative Comparison ====="
+          cd QuantLib/build-forge
+          export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
+          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --diagnose --diagnose-paths=100 2>&1 | tee diagnostic_results.txt
+
+      # =========================================================================
+      # Benchmark 2: Plain double QuantLib (for FD benchmark)
+      # =========================================================================
+      - name: Configure QuantLib (plain double)
+        run: |
+          cd QuantLib
+          cmake -B build-double -G Ninja -DBOOST_ROOT=/usr \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DQL_BUILD_TEST_SUITE=OFF \
+            -DQL_BUILD_EXAMPLES=OFF \
+            -DQL_BUILD_BENCHMARK=OFF \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../QuantLib-Risks-Cpp" \
+            -DQLRISKS_DISABLE_AAD=ON \
+            -DQLRISKS_BUILD_BENCHMARK_FD=ON
+
+      - name: Build FD benchmark (plain double)
+        run: |
+          cd QuantLib/build-double
+          cmake --build . --target benchmark_fd
+
+      - name: Run FD Benchmark (plain double)
+        run: |
+          echo "===== FD BENCHMARK (plain double QuantLib) ====="
+          cd QuantLib/build-double
+          ./QuantLib-Risks-Cpp/test-suite/benchmark-fd --all 2>&1 | tee fd_results.txt
+
+      # =========================================================================
+      # Benchmark 3: XAD (JIT disabled) for XAD tape AAD
+      # =========================================================================
+      - name: Configure QuantLib (XAD, JIT off)
+        run: |
+          cd QuantLib
+          cmake -B build-xad -G Ninja -DBOOST_ROOT=/usr \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DXAD_WARNINGS_PARANOID=OFF \
+            -DXAD_USE_STRONG_INLINE=ON \
+            -DXAD_NO_THREADLOCAL=ON \
+            -DXAD_SIMD_OPTION=AVX2 \
+            -DXAD_ENABLE_JIT=OFF \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../QuantLib-Risks-Cpp" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_NULL_AS_FUNCTIONS=ON \
+            -DQL_BUILD_TEST_SUITE=OFF \
+            -DQL_BUILD_EXAMPLES=OFF \
+            -DQL_BUILD_BENCHMARK=OFF \
+            -DQLRISKS_DISABLE_AAD=OFF \
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+
+      - name: Build XAD benchmark (JIT off)
+        run: |
+          cd QuantLib/build-xad
+          cmake --build . --target benchmark_aad
+
+      - name: Run XAD Benchmark (JIT off)
+        run: |
+          echo "===== XAD BENCHMARK (XAD-Full + XAD) ====="
+          cd QuantLib/build-xad
+          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all --xad-only 2>&1 | tee xad_results.txt
+
+      # =========================================================================
+      # Combine and display results
+      # =========================================================================
+      - name: Generate Combined Report
+        run: |
+          echo "================================================================================"
+          echo "  COMBINED BENCHMARK RESULTS"
+          echo "================================================================================"
+          echo ""
+          echo "All benchmarks ran on the same hardware for fair comparison."
+          echo ""
+          echo "Raw data (for parsing):"
+          echo ""
+          grep -E "^(FD_|VALIDATE_)" QuantLib/build-double/fd_results.txt 2>/dev/null || true
+          grep -E "^(XADFULL_|XAD_|VALIDATE_)" QuantLib/build-xad/xad_results.txt 2>/dev/null || true
+          grep -E "^(FORGE_|FORGEAVX_|FORGE_PHASES_|VALIDATE_)" QuantLib/build-forge/forge_results.txt 2>/dev/null || true
+          echo ""
+          echo "================================================================================"
+          echo ""
+
+          # Create a Python script to parse and format results
+          cat > format_results.py << 'PYEOF'
+          import sys
+          import re
+          from collections import defaultdict
+
+          def parse_line(line):
+              """Parse a line like 'METHOD_CONFIG:10=1.5,0.1,1[,fixed];100=5.2,0.2,1[,fixed]'"""
+              match = re.match(r'^(\w+)_(\w+):(.+)$', line.strip())
+              if not match:
+                  return None
+              method, config, data = match.groups()
+              results = {}
+              for item in data.split(';'):
+                  if '=' in item:
+                      paths, vals = item.split('=')
+                      parts = vals.split(',')
+                      mean, std, enabled = parts[0], parts[1], parts[2]
+                      fixed = float(parts[3]) if len(parts) > 3 else 0.0
+                      if enabled == '1' and float(mean) > 0:
+                          results[int(paths)] = {'mean': float(mean), 'fixed': fixed}
+              return method, config, results
+
+          def parse_phases_line(line):
+              """Parse FORGE_PHASES_CONFIG:p1,p2,p3"""
+              match = re.match(r'^FORGE_PHASES_(\w+):(.+)$', line.strip())
+              if not match:
+                  return None
+              config, data = match.groups()
+              parts = data.split(',')
+              if len(parts) >= 3:
+                  return config, {
+                      'phase1': float(parts[0]),
+                      'phase2': float(parts[1]),
+                      'phase3': float(parts[2])
+                  }
+              return None
+
+          def format_num(n):
+              """Format number with appropriate precision"""
+              if n >= 1000:
+                  return f"{n:.0f}"
+              elif n >= 100:
+                  return f"{n:.1f}"
+              elif n >= 10:
+                  return f"{n:.1f}"
+              else:
+                  return f"{n:.2f}"
+
+          def format_paths(p):
+              """Format path count: 100, 1K, 10K, 100K"""
+              if p >= 1000:
+                  return f"{p//1000}K"
+              return str(p)
+
+          # Read all result files
+          data = defaultdict(lambda: defaultdict(dict))  # data[config][method][paths] = {mean, fixed}
+          phases = {}  # phases[config] = {phase1, phase2, phase3}
+
+          for filepath in sys.argv[1:]:
+              # Skip XAD from forge_results.txt (use xad_results.txt instead for fair comparison)
+              is_forge_results = 'forge_results' in filepath
+              try:
+                  with open(filepath) as f:
+                      for line in f:
+                          result = parse_line(line)
+                          if result:
+                              method, config, results = result
+                              # Use XAD from xad_results.txt, not forge_results.txt
+                              if is_forge_results and method == 'XAD':
+                                  continue
+                              for paths, vals in results.items():
+                                  data[config][method][paths] = vals
+                          phase_result = parse_phases_line(line)
+                          if phase_result:
+                              config, phase_data = phase_result
+                              phases[config] = phase_data
+              except FileNotFoundError:
+                  pass
+
+          # Generate side-by-side summary table (Production vs CVA)
+          print("SUMMARY TABLE (all times in ms)")
+          print("")
+          print("  | Paths  |    Method |  45 inputs |  90 inputs |")
+          print("  |--------|-----------|------------|------------|")
+
+          path_counts = [1000, 10000, 100000]
+          methods_to_show = ['FD', 'XAD', 'FORGEAVX']
+          method_display = {'FD': 'FD', 'XAD': 'XAD', 'FORGEAVX': 'Forge-AVX'}
+
+          for i, paths in enumerate(path_counts):
+              for j, method in enumerate(methods_to_show):
+                  # Get values for PRODUCTION (45 inputs) and CVA (90 inputs)
+                  prod_val = data.get('PRODUCTION', {}).get(method, {}).get(paths, {})
+                  cva_val = data.get('CVA', {}).get(method, {}).get(paths, {})
+
+                  prod_str = format_num(prod_val['mean']) if prod_val else '-'
+                  cva_str = format_num(cva_val['mean']) if cva_val else '-'
+
+                  path_col = format_paths(paths) if j == 0 else ''
+                  print(f"  | {path_col:>6} | {method_display[method]:>9} | {prod_str:>10} | {cva_str:>10} |")
+
+              # Separator between path count groups (except after last)
+              if i < len(path_counts) - 1:
+                  print("  |--------+-----------+------------+------------|")
+
+          print("")
+          print("  Notes:")
+          print("  - XAD uses Jacobian splitting for O(1) scaling with inputs")
+          print("  - Forge uses XAD for curve bootstrap + Jacobian, then JIT compiles the graph")
+          print("  - Forge-AVX adds AVX2 vectorization (4 paths at a time)")
+          print("  - FD = Finite Differences baseline (O(n) scaling with inputs)")
+
+          # Print Forge phase breakdown if available
+          if 'PRODUCTION' in phases:
+              p = phases['PRODUCTION']
+              total = p['phase1'] + p['phase2'] + p['phase3']
+              print("")
+              print("  Forge setup breakdown (one-time cost):")
+              print(f"    Curve bootstrap: {format_num(p['phase1'])} ms")
+              print(f"    Jacobian:        {format_num(p['phase2'])} ms")
+              print(f"    JIT compile:     {format_num(p['phase3'])} ms")
+              print(f"    Total:           {format_num(total)} ms")
+          PYEOF
+
+          python3 format_results.py \
+            QuantLib/build-double/fd_results.txt \
+            QuantLib/build-xad/xad_results.txt \
+            QuantLib/build-forge/forge_results.txt
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-benchmark-results
+          path: |
+            QuantLib/build-double/fd_results.txt
+            QuantLib/build-xad/xad_results.txt
+            QuantLib/build-forge/forge_results.txt
+
+  ##############################################################################
+  # Windows, QL + XAD + Forge
+  # Comprehensive benchmark: FD (plain double) vs XAD vs Forge JIT
+  ##############################################################################
+  windows-benchmark:
+    name: Windows, QL + XAD + Forge
+    runs-on: windows-2022
+
+    env:
+      VSVARSALL: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+
+    steps:
+      - name: Checkout QuantLib
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.QL_REPO }}
+          ref: ${{ env.QL_BRANCH }}
+          path: QuantLib
+
+      - name: Checkout XAD
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_REPO }}
+          ref: ${{ env.XAD_BRANCH }}
+          path: xad
+
+      - name: Checkout Forge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FORGE_REPO }}
+          ref: ${{ env.FORGE_BRANCH }}
+          path: forge
+
+      - name: Checkout xad-forge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_FORGE_REPO }}
+          ref: ${{ env.XAD_FORGE_BRANCH }}
+          path: xad-forge
+
+      - name: Checkout QuantLib-Risks-Cpp
+        uses: actions/checkout@v4
+        with:
+          path: QuantLib-Risks-Cpp
+
+      - name: Setup
+        run: choco install -y ninja
+
+      - name: Setup Boost
+        run: |
+          $Url = "https://downloads.sourceforge.net/project/boost/boost-binaries/1.86.0/boost_1_86_0-msvc-14.3-64.exe"
+          (New-Object System.Net.WebClient).DownloadFile($Url, "$RUNNER_TEMP\boost.exe")
+          Start-Process -Wait -FilePath "$RUNNER_TEMP\boost.exe" "/SILENT","/SP-","/SUPPRESSMSGBOXES","/DIR=C:\local\boost"
+          echo "BOOST_ROOT=C:\local\boost" >> $env:GITHUB_ENV
+
+      # =========================================================================
+      # Build Forge C API
+      # =========================================================================
+      - name: Build Forge C API
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd forge
+          cmake -B build -S api/c -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DFORGE_CAPI_BUILD_TESTS=OFF ^
+            -DFORGE_CAPI_USE_STATIC_RUNTIME=ON ^
+            -DCMAKE_INSTALL_PREFIX=%CD%\..\install
+          cmake --build build
+          cmake --install build
+
+      # =========================================================================
+      # Benchmark 1: XAD + Forge (JIT enabled) - Run first (longest build)
+      # =========================================================================
+      - name: Configure QuantLib (XAD + Forge)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib
+          cmake -B build-forge -G Ninja ^
+            -DCMAKE_CXX_STANDARD=17 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DXAD_WARNINGS_PARANOID=OFF ^
+            -DXAD_USE_STRONG_INLINE=OFF ^
+            -DXAD_NO_THREADLOCAL=ON ^
+            -DXAD_SIMD_OPTION=AVX2 ^
+            -DXAD_ENABLE_JIT=ON ^
+            -DXAD_STATIC_MSVC_RUNTIME=ON ^
+            -DCMAKE_PREFIX_PATH=%CD%\..\install ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\xad-forge;%CD%\..\QuantLib-Risks-Cpp" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_NULL_AS_FUNCTIONS=ON ^
+            -DQL_BUILD_TEST_SUITE=OFF ^
+            -DQL_BUILD_EXAMPLES=OFF ^
+            -DQL_BUILD_BENCHMARK=OFF ^
+            -DQLRISKS_DISABLE_AAD=OFF ^
+            -DQLRISKS_ENABLE_FORGE=ON ^
+            -DQLRISKS_USE_FORGE_CAPI=ON ^
+            -DXAD_FORGE_USE_CAPI=ON ^
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+
+      - name: Build Forge benchmark (JIT on)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib\build-forge
+          cmake --build . --target benchmark_aad -- -j 2
+
+      - name: Run Forge Benchmark (JIT on)
+        shell: cmd
+        run: |
+          echo ===== FORGE BENCHMARK (Forge + Forge-AVX) =====
+          cd QuantLib\build-forge
+          set PATH=%CD%\..\..\install\bin;%PATH%
+          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all > forge_results.txt 2>&1
+          type forge_results.txt
+
+      - name: Run XAD vs Forge Diagnostic
+        shell: cmd
+        run: |
+          echo ===== DIAGNOSTIC: XAD vs Forge Derivative Comparison =====
+          cd QuantLib\build-forge
+          set PATH=%CD%\..\..\install\bin;%PATH%
+          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --diagnose --diagnose-paths=100 > diagnostic_results.txt 2>&1
+          type diagnostic_results.txt
+
+      # =========================================================================
+      # Benchmark 2: Plain double QuantLib (for FD benchmark)
+      # =========================================================================
+      - name: Configure QuantLib (plain double)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib
+          cmake -B build-double -G Ninja ^
+            -DCMAKE_CXX_STANDARD=17 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DQL_BUILD_TEST_SUITE=OFF ^
+            -DQL_BUILD_EXAMPLES=OFF ^
+            -DQL_BUILD_BENCHMARK=OFF ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\QuantLib-Risks-Cpp" ^
+            -DQLRISKS_DISABLE_AAD=ON ^
+            -DQLRISKS_BUILD_BENCHMARK_FD=ON
+
+      - name: Build FD benchmark (plain double)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib\build-double
+          cmake --build . --target benchmark_fd
+
+      - name: Run FD Benchmark (plain double)
+        shell: cmd
+        run: |
+          echo ===== FD BENCHMARK (plain double QuantLib) =====
+          cd QuantLib\build-double
+          QuantLib-Risks-Cpp\test-suite\benchmark-fd.exe --all > fd_results.txt 2>&1
+          type fd_results.txt
+
+      # =========================================================================
+      # Benchmark 3: XAD (JIT disabled) for XAD tape AAD
+      # =========================================================================
+      - name: Configure QuantLib (XAD, JIT off)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib
+          cmake -B build-xad -G Ninja ^
+            -DCMAKE_CXX_STANDARD=17 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DXAD_WARNINGS_PARANOID=OFF ^
+            -DXAD_USE_STRONG_INLINE=OFF ^
+            -DXAD_NO_THREADLOCAL=ON ^
+            -DXAD_SIMD_OPTION=AVX2 ^
+            -DXAD_ENABLE_JIT=OFF ^
+            -DXAD_STATIC_MSVC_RUNTIME=ON ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\QuantLib-Risks-Cpp" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_NULL_AS_FUNCTIONS=ON ^
+            -DQL_BUILD_TEST_SUITE=OFF ^
+            -DQL_BUILD_EXAMPLES=OFF ^
+            -DQL_BUILD_BENCHMARK=OFF ^
+            -DQLRISKS_DISABLE_AAD=OFF ^
+            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+
+      - name: Build XAD benchmark (JIT off)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib\build-xad
+          cmake --build . --target benchmark_aad -- -j 2
+
+      - name: Run XAD Benchmark (JIT off)
+        shell: cmd
+        run: |
+          echo ===== XAD BENCHMARK (XAD-Full + XAD) =====
+          cd QuantLib\build-xad
+          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all --xad-only > xad_results.txt 2>&1
+          type xad_results.txt
+
+      # =========================================================================
+      # Combine and display results
+      # =========================================================================
+      - name: Generate Combined Report
+        shell: pwsh
+        run: |
+          Write-Host "================================================================================"
+          Write-Host "  COMBINED BENCHMARK RESULTS (Windows)"
+          Write-Host "================================================================================"
+          Write-Host ""
+          Write-Host "All benchmarks ran on the same hardware for fair comparison."
+          Write-Host ""
+          Write-Host "Raw data (for parsing):"
+          Write-Host ""
+          Get-Content QuantLib/build-double/fd_results.txt 2>$null | Select-String "^(FD_|VALIDATE_)"
+          Get-Content QuantLib/build-xad/xad_results.txt 2>$null | Select-String "^(XADFULL_|XAD_|VALIDATE_)"
+          Get-Content QuantLib/build-forge/forge_results.txt 2>$null | Select-String "^(FORGE_|FORGEAVX_|FORGE_PHASES_|VALIDATE_)"
+          Write-Host ""
+          Write-Host "================================================================================"
+          Write-Host ""
+
+          $script = @'
+          import sys
+          import re
+          from collections import defaultdict
+
+          def parse_line(line):
+              match = re.match(r'^(\w+)_(\w+):(.+)$', line.strip())
+              if not match:
+                  return None
+              method, config, data = match.groups()
+              results = {}
+              for item in data.split(';'):
+                  if '=' in item:
+                      paths, vals = item.split('=')
+                      parts = vals.split(',')
+                      mean, std, enabled = parts[0], parts[1], parts[2]
+                      fixed = float(parts[3]) if len(parts) > 3 else 0.0
+                      if enabled == '1' and float(mean) > 0:
+                          results[int(paths)] = {'mean': float(mean), 'fixed': fixed}
+              return method, config, results
+
+          def parse_phases_line(line):
+              match = re.match(r'^FORGE_PHASES_(\w+):(.+)$', line.strip())
+              if not match:
+                  return None
+              config, data = match.groups()
+              parts = data.split(',')
+              if len(parts) >= 3:
+                  return config, {'phase1': float(parts[0]), 'phase2': float(parts[1]), 'phase3': float(parts[2])}
+              return None
+
+          def format_num(n):
+              if n >= 1000: return f"{n:.0f}"
+              elif n >= 100: return f"{n:.1f}"
+              elif n >= 10: return f"{n:.1f}"
+              else: return f"{n:.2f}"
+
+          def format_paths(p):
+              if p >= 1000: return f"{p//1000}K"
+              return str(p)
+
+          data = defaultdict(lambda: defaultdict(dict))
+          phases = {}
+          for filepath in sys.argv[1:]:
+              is_forge_results = 'forge_results' in filepath
+              try:
+                  with open(filepath) as f:
+                      for line in f:
+                          result = parse_line(line)
+                          if result:
+                              method, config, results = result
+                              if is_forge_results and method == 'XAD':
+                                  continue
+                              for paths, vals in results.items():
+                                  data[config][method][paths] = vals
+                          phase_result = parse_phases_line(line)
+                          if phase_result:
+                              config, phase_data = phase_result
+                              phases[config] = phase_data
+              except: pass
+
+          print("SUMMARY TABLE (all times in ms)")
+          print("")
+          print("  | Paths  |    Method |  45 inputs |  90 inputs |")
+          print("  |--------|-----------|------------|------------|")
+
+          path_counts = [1000, 10000, 100000]
+          methods_to_show = ['FD', 'XAD', 'FORGEAVX']
+          method_display = {'FD': 'FD', 'XAD': 'XAD', 'FORGEAVX': 'Forge-AVX'}
+
+          for i, paths in enumerate(path_counts):
+              for j, method in enumerate(methods_to_show):
+                  prod_val = data.get('PRODUCTION', {}).get(method, {}).get(paths, {})
+                  cva_val = data.get('CVA', {}).get(method, {}).get(paths, {})
+
+                  prod_str = format_num(prod_val['mean']) if prod_val else '-'
+                  cva_str = format_num(cva_val['mean']) if cva_val else '-'
+
+                  path_col = format_paths(paths) if j == 0 else ''
+                  print(f"  | {path_col:>6} | {method_display[method]:>9} | {prod_str:>10} | {cva_str:>10} |")
+
+              if i < len(path_counts) - 1:
+                  print("  |--------+-----------+------------+------------|")
+
+          print("")
+          print("  Notes:")
+          print("  - XAD uses Jacobian splitting for O(1) scaling with inputs")
+          print("  - Forge uses XAD for curve bootstrap + Jacobian, then JIT compiles the graph")
+          print("  - Forge-AVX adds AVX2 vectorization (4 paths at a time)")
+          print("  - FD = Finite Differences baseline (O(n) scaling with inputs)")
+
+          if 'PRODUCTION' in phases:
+              p = phases['PRODUCTION']
+              total = p['phase1'] + p['phase2'] + p['phase3']
+              print("")
+              print("  Forge setup breakdown (one-time cost):")
+              print(f"    Curve bootstrap: {format_num(p['phase1'])} ms")
+              print(f"    Jacobian:        {format_num(p['phase2'])} ms")
+              print(f"    JIT compile:     {format_num(p['phase3'])} ms")
+              print(f"    Total:           {format_num(total)} ms")
+          '@
+
+          $script | Out-File -FilePath format_results.py -Encoding utf8
+          python format_results.py `
+            QuantLib/build-double/fd_results.txt `
+            QuantLib/build-xad/xad_results.txt `
+            QuantLib/build-forge/forge_results.txt
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-benchmark-results
+          path: |
+            QuantLib/build-double/fd_results.txt
+            QuantLib/build-xad/xad_results.txt
+            QuantLib/build-forge/forge_results.txt
