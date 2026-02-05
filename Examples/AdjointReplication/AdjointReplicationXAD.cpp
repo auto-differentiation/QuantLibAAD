@@ -2,7 +2,7 @@
 
 /*
  Copyright (C) 2006, 2007 StatPro Italia srl
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -21,8 +21,8 @@
 
 /*
 This example is an AAD-enabled version for the Replication sample that ships with
-QuantLib. It calculates sensitivities using XAD and measures peformance.
-When QLRISKS_DISABLE_AAD is ON, it calculates the sensitivities using finite differences.
+QuantLib. It calculates sensitivities using XAD and measures performance.
+When QLAAD_DISABLE_AAD is ON, it calculates the sensitivities using finite differences.
 */
 
 #include <ql/qldefines.hpp>
@@ -163,7 +163,7 @@ Real pricePortfolio(const std::vector<Date>& dates,
 }
 
 
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;

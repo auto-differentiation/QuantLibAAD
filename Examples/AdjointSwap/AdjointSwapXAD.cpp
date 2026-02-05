@@ -1,7 +1,7 @@
 /* -*- mode: c++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 
 /*
- Copyright (C) 2022, 2023, 2024 Xcelerit
+ Copyright (C) 2022-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -22,7 +22,7 @@
 This example shows how to calculate sensitivities to market quotes for
 pricing a portfolio of swaps using XAD.
 It also measures the performance for calculating sensitivities,
-either with XAD or with plain doubles and bumping (when QLRISKS_DISABLE_AAD is ON).
+either with XAD or with plain doubles and bumping (when QLAAD_DISABLE_AAD is ON).
 */
 
 
@@ -192,7 +192,7 @@ Real pricePlain(const std::vector<double>& marketQuotes, Size portfolioSize, Siz
     return v;
 }
 
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;

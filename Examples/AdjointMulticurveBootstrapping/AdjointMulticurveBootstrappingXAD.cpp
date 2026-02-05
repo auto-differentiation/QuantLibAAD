@@ -5,7 +5,7 @@
  Copyright (C) 2003, 2004, 2005, 2006, 2007 StatPro Italia srl
  Copyright (C) 2004 Ferdinando Ametrano
  Copyright (C) 2018 Jose Garcia
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -27,7 +27,7 @@ This example demonstrates how to use XAD to calculate sensitivities to
 market quotes when multi-curve bootstrapping is used from many input
 quotes.
 It also measures the performance for calculating sensitivities,
-either with XAD or with plain doubles and bumping (when QLRISKS_DISABLE_AAD is ON).
+either with XAD or with plain doubles and bumping (when QLAAD_DISABLE_AAD is ON).
 */
 
 #include <ql/qldefines.hpp>
@@ -260,7 +260,7 @@ Real priceMulticurveBootstrappingSwap(const std::vector<Real>& depos,
     return spot5YearSwap.NPV();
 }
 
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;

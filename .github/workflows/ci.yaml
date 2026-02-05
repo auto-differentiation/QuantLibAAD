@@ -1,8 +1,8 @@
 ##############################################################################
 #
-#  QuantLib-Risks-Cpp CI Workflow
+#  QuantLibAAD CI Workflow
 #
-#  Tests QuantLib-Risks-Cpp with XAD automatic differentiation, and optionally
+#  Tests QuantLibAAD with XAD automatic differentiation, and optionally
 #  with Forge JIT acceleration on Linux and Windows.
 #
 #  Jobs:
@@ -13,7 +13,7 @@
 #  - forge-linux: XAD + Forge JIT tests (C++17, Release/Debug)
 #  - forge-windows: XAD + Forge JIT tests (C++17, Release/Debug)
 #
-#  Copyright (C) 2025 Xcelerit Computing Limited
+#  Copyright (C) 2010-2026 Xcelerit Computing Limited
 #
 #  SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -73,8 +73,8 @@ jobs:
   ##############################################################################
   # Linux - XAD
   #
-  # Note on disable_aad naming: This uses the original QuantLib-Risks-Cpp
-  # convention where QLRISKS_DISABLE_AAD=OFF means AAD is ENABLED (not disabled).
+  # Note on disable_aad naming: This uses the original QuantLibAAD
+  # convention where QLAAD_DISABLE_AAD=OFF means AAD is ENABLED (not disabled).
   # The confusing double-negative is preserved for compatibility.
   ##############################################################################
   xad-linux:
@@ -101,7 +101,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.12
@@ -121,11 +121,11 @@ jobs:
           cd build
           cmake -G Ninja -DBOOST_ROOT=/usr \
             -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} \
-            -DQLRISKS_DISABLE_AAD=${{ matrix.disable_aad }} \
+            -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DCMAKE_INSTALL_PREFIX=$(pwd)/../../install \
             ..
@@ -140,11 +140,11 @@ jobs:
           cd QuantLib/build
           ./test-suite/quantlib-test-suite --log_level=message
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
         run: |
           cd QuantLib/build
-          ./QuantLib-Risks-Cpp/test-suite/quantlib-risks-test-suite --log_level=message
+          ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -156,11 +156,11 @@ jobs:
         if: ${{ matrix.disable_aad == 'OFF' }}
         run: |
           mkdir installtest
-          cp QuantLib-Risks-Cpp/Examples/AdjointSwap/AdjointSwapXAD.cpp installtest
+          cp QuantLibAAD/Examples/AdjointSwap/AdjointSwapXAD.cpp installtest
           cd installtest
           echo "cmake_minimum_required(VERSION 3.15.2)" > CMakeLists.txt
           echo "project(QlTest LANGUAGES CXX)" >> CMakeLists.txt
-          echo "find_package(QuantLib-Risks REQUIRED)" >> CMakeLists.txt
+          echo "find_package(QuantLibAAD REQUIRED)" >> CMakeLists.txt
           echo "add_executable(AdjointSwapXAD AdjointSwapXAD.cpp)" >> CMakeLists.txt
           echo "target_link_libraries(AdjointSwapXAD PRIVATE QuantLib::QuantLib)" >> CMakeLists.txt
           echo "target_compile_features(AdjointSwapXAD PUBLIC cxx_std_17)" >> CMakeLists.txt
@@ -202,7 +202,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: sccache
         uses: hendrikmuhs/ccache-action@v1.2.12
@@ -227,12 +227,12 @@ jobs:
           mkdir build
           cd build
           call "${{ env.vsvarsall }}" amd64
-          cmake .. -G Ninja -DQLRISKS_DISABLE_AAD=${{ matrix.disable_aad }} ^
+          cmake .. -G Ninja -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} ^
           -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} ^
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
           -DCMAKE_BUILD_TYPE=Release ^
-          -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLib-Risks-Cpp" ^
-          -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+          -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLibAAD" ^
+          -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
           -DQL_NULL_AS_FUNCTIONS=ON ^
           -DXAD_STATIC_MSVC_RUNTIME=ON ^
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
@@ -251,13 +251,13 @@ jobs:
           call "${{ env.vsvarsall }}" amd64
           .\test-suite\quantlib-test-suite --log_level=message
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
         shell: cmd
         run: |
           cd QuantLib\build
           call "${{ env.vsvarsall }}" amd64
-          .\QuantLib-Risks-Cpp\test-suite\quantlib-risks-test-suite --log_level=message
+          .\QuantLibAAD\test-suite\quantlib-aad-test-suite --log_level=message
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -272,11 +272,11 @@ jobs:
         shell: cmd
         run: |
           mkdir installtest
-          copy QuantLib-Risks-Cpp\Examples\AdjointSwap\AdjointSwapXAD.cpp installtest
+          copy QuantLibAAD\Examples\AdjointSwap\AdjointSwapXAD.cpp installtest
           cd installtest
           echo cmake_minimum_required(VERSION 3.15.2) > CMakeLists.txt
           echo project(QlTest LANGUAGES CXX) >> CMakeLists.txt
-          echo find_package(QuantLib-Risks REQUIRED) >> CMakeLists.txt
+          echo find_package(QuantLibAAD REQUIRED) >> CMakeLists.txt
           echo add_executable(AdjointSwapXAD AdjointSwapXAD.cpp) >> CMakeLists.txt
           echo target_link_libraries(AdjointSwapXAD PRIVATE QuantLib::QuantLib) >> CMakeLists.txt
           echo set_target_properties(AdjointSwapXAD PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded) >> CMakeLists.txt
@@ -315,7 +315,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: Setup
         run: |
@@ -334,11 +334,11 @@ jobs:
           cd build
           cmake -G Ninja \
             -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} \
-            -DQLRISKS_DISABLE_AAD=${{ matrix.disable_aad }} \
+            -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install \
             ..
@@ -353,11 +353,11 @@ jobs:
           cd QuantLib/build
           ./test-suite/quantlib-test-suite --log_level=message
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
         run: |
           cd QuantLib/build
-          ./QuantLib-Risks-Cpp/test-suite/quantlib-risks-test-suite --log_level=message
+          ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -369,11 +369,11 @@ jobs:
         if: ${{ matrix.disable_aad == 'OFF' }}
         run: |
           mkdir installtest
-          cp QuantLib-Risks-Cpp/Examples/AdjointSwap/AdjointSwapXAD.cpp installtest
+          cp QuantLibAAD/Examples/AdjointSwap/AdjointSwapXAD.cpp installtest
           cd installtest
           echo "cmake_minimum_required(VERSION 3.15.2)" > CMakeLists.txt
           echo "project(QlTest LANGUAGES CXX)" >> CMakeLists.txt
-          echo "find_package(QuantLib-Risks REQUIRED)" >> CMakeLists.txt
+          echo "find_package(QuantLibAAD REQUIRED)" >> CMakeLists.txt
           echo "add_executable(AdjointSwapXAD AdjointSwapXAD.cpp)" >> CMakeLists.txt
           echo "target_link_libraries(AdjointSwapXAD PRIVATE QuantLib::QuantLib)" >> CMakeLists.txt
           echo "target_compile_features(AdjointSwapXAD PUBLIC cxx_std_17)" >> CMakeLists.txt
@@ -408,7 +408,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: Setup
         run: |
@@ -429,8 +429,8 @@ jobs:
             -DQL_USE_STD_CLASSES=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             ..
 
@@ -444,16 +444,16 @@ jobs:
           cd QuantLib/build
           ./test-suite/quantlib-test-suite --log_level=message
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         run: |
           cd QuantLib/build
-          ./QuantLib-Risks-Cpp/test-suite/quantlib-risks-test-suite --log_level=message
+          ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
 
   ##############################################################################
   # Linux - XAD + Forge JIT
   #
   # Forge accelerates AAD tape computations via JIT compilation, so these jobs
-  # only make sense with AAD enabled (QLRISKS_DISABLE_AAD=OFF).
+  # only make sense with AAD enabled (QLAAD_DISABLE_AAD=OFF).
   # Tests C++17 and C++20 to match original XAD job coverage.
   ##############################################################################
   forge-linux:
@@ -494,10 +494,10 @@ jobs:
           ref: ${{ env.xad_forge_branch }}
           path: xad-forge
 
-      - name: Checkout QuantLib-Risks-Cpp
+      - name: Checkout QuantLibAAD
         uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.12
@@ -531,18 +531,18 @@ jobs:
             -DXAD_WARNINGS_PARANOID=OFF \
             -DXAD_ENABLE_JIT=ON \
             -DCMAKE_PREFIX_PATH=$(pwd)/../../install \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../xad-forge;$(pwd)/../../QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../xad-forge;$(pwd)/../../QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DQL_BUILD_TEST_SUITE=OFF \
             -DQL_BUILD_EXAMPLES=OFF \
             -DQL_BUILD_BENCHMARK=OFF \
-            -DQLRISKS_DISABLE_AAD=OFF \
-            -DQLRISKS_ENABLE_FORGE=ON \
-            -DQLRISKS_USE_FORGE_CAPI=ON \
+            -DQLAAD_DISABLE_AAD=OFF \
+            -DQLAAD_ENABLE_FORGE=ON \
+            -DQLAAD_USE_FORGE_CAPI=ON \
             -DXAD_FORGE_USE_CAPI=ON \
-            -DQLRISKS_BUILD_TEST_SUITE=ON \
-            -DQLRISKS_ENABLE_FORGE_TESTS=ON \
+            -DQLAAD_BUILD_TEST_SUITE=ON \
+            -DQLAAD_ENABLE_FORGE_TESTS=ON \
             ..
 
       - name: Build
@@ -550,16 +550,16 @@ jobs:
           cd QuantLib/build
           cmake --build .
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         run: |
           cd QuantLib/build
-          ./QuantLib-Risks-Cpp/test-suite/quantlib-risks-test-suite --log_level=message
+          ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
 
   ##############################################################################
   # Windows - XAD + Forge JIT
   #
   # Forge accelerates AAD tape computations via JIT compilation, so these jobs
-  # only make sense with AAD enabled (QLRISKS_DISABLE_AAD=OFF).
+  # only make sense with AAD enabled (QLAAD_DISABLE_AAD=OFF).
   # Tests C++17 and C++20 to match original XAD job coverage.
   ##############################################################################
   forge-windows:
@@ -602,10 +602,10 @@ jobs:
           ref: ${{ env.xad_forge_branch }}
           path: xad-forge
 
-      - name: Checkout QuantLib-Risks-Cpp
+      - name: Checkout QuantLibAAD
         uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: Setup
         run: choco install -y ninja
@@ -642,18 +642,18 @@ jobs:
             -DXAD_ENABLE_JIT=ON ^
             -DXAD_STATIC_MSVC_RUNTIME=ON ^
             -DCMAKE_PREFIX_PATH="%cd%\..\install" ^
-            -DQL_EXTERNAL_SUBDIRECTORIES="%cd%\..\xad;%cd%\..\xad-forge;%cd%\..\QuantLib-Risks-Cpp" ^
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%cd%\..\xad;%cd%\..\xad-forge;%cd%\..\QuantLibAAD" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
             -DQL_NULL_AS_FUNCTIONS=ON ^
             -DQL_BUILD_TEST_SUITE=OFF ^
             -DQL_BUILD_EXAMPLES=OFF ^
             -DQL_BUILD_BENCHMARK=OFF ^
-            -DQLRISKS_DISABLE_AAD=OFF ^
-            -DQLRISKS_ENABLE_FORGE=ON ^
-            -DQLRISKS_USE_FORGE_CAPI=ON ^
+            -DQLAAD_DISABLE_AAD=OFF ^
+            -DQLAAD_ENABLE_FORGE=ON ^
+            -DQLAAD_USE_FORGE_CAPI=ON ^
             -DXAD_FORGE_USE_CAPI=ON ^
-            -DQLRISKS_BUILD_TEST_SUITE=ON ^
-            -DQLRISKS_ENABLE_FORGE_TESTS=ON
+            -DQLAAD_BUILD_TEST_SUITE=ON ^
+            -DQLAAD_ENABLE_FORGE_TESTS=ON
 
       - name: Build
         shell: cmd
@@ -662,9 +662,9 @@ jobs:
           call "%VSVARSALL%" amd64
           cmake --build . --config ${{ matrix.build_type }}
 
-      - name: Test QuantLib-Risks
+      - name: Test QuantLibAAD
         shell: cmd
         run: |
           cd QuantLib\build
           set PATH=%cd%\..\..\install\bin;%PATH%
-          QuantLib-Risks-Cpp\test-suite\quantlib-risks-test-suite.exe --log_level=message
+          QuantLibAAD\test-suite\quantlib-aad-test-suite.exe --log_level=message

@@ -1,6 +1,6 @@
 ##############################################################################
 #
-#  QuantLib-Risks Benchmarks
+#  QuantLibAAD Benchmarks
 #
 #  Comprehensive benchmark comparing FD vs XAD vs Forge
 #
@@ -18,11 +18,11 @@
 #  Dependencies:
 #  - QuantLib (lballabio/QuantLib)
 #  - XAD (auto-differentiation/xad)
-#  - QuantLib-Risks-Cpp (this repo)
+#  - QuantLibAAD (this repo)
 #  - xad-forge (da-roth/xad-forge) [Forge builds]
 #  - Forge C API (da-roth/forge) [Forge builds]
 #
-#  Copyright (C) 2025 Xcelerit Computing Limited
+#  Copyright (C) 2010-2026 Xcelerit Computing Limited
 #  SPDX-License-Identifier: AGPL-3.0-or-later
 #
 ##############################################################################
@@ -100,10 +100,10 @@ jobs:
           ref: ${{ env.XAD_FORGE_BRANCH }}
           path: xad-forge
 
-      - name: Checkout QuantLib-Risks-Cpp
+      - name: Checkout QuantLibAAD
         uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: Setup
         run: |
@@ -145,17 +145,17 @@ jobs:
             -DXAD_SIMD_OPTION=AVX2 \
             -DXAD_ENABLE_JIT=ON \
             -DCMAKE_PREFIX_PATH=$(pwd)/../install \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../xad-forge;$(pwd)/../QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../xad-forge;$(pwd)/../QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DQL_BUILD_TEST_SUITE=OFF \
             -DQL_BUILD_EXAMPLES=OFF \
             -DQL_BUILD_BENCHMARK=OFF \
-            -DQLRISKS_DISABLE_AAD=OFF \
-            -DQLRISKS_ENABLE_FORGE=ON \
-            -DQLRISKS_USE_FORGE_CAPI=ON \
+            -DQLAAD_DISABLE_AAD=OFF \
+            -DQLAAD_ENABLE_FORGE=ON \
+            -DQLAAD_USE_FORGE_CAPI=ON \
             -DXAD_FORGE_USE_CAPI=ON \
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+            -DQLAAD_BUILD_BENCHMARK_AAD=ON
 
       - name: Build Forge benchmark (JIT on)
         run: |
@@ -167,14 +167,14 @@ jobs:
           echo "===== FORGE BENCHMARK (Forge + Forge-AVX) ====="
           cd QuantLib/build-forge
           export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
-          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all 2>&1 | tee forge_results.txt
+          ./QuantLibAAD/test-suite/benchmark-aad --all 2>&1 | tee forge_results.txt
 
       - name: Run XAD vs Forge Diagnostic
         run: |
           echo "===== DIAGNOSTIC: XAD vs Forge Derivative Comparison ====="
           cd QuantLib/build-forge
           export LD_LIBRARY_PATH=$(pwd)/../../install/lib:$LD_LIBRARY_PATH
-          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --diagnose --diagnose-paths=100 2>&1 | tee diagnostic_results.txt
+          ./QuantLibAAD/test-suite/benchmark-aad --diagnose --diagnose-paths=100 2>&1 | tee diagnostic_results.txt
 
       # =========================================================================
       # Benchmark 2: Plain double QuantLib (for FD benchmark)
@@ -189,9 +189,9 @@ jobs:
             -DQL_BUILD_TEST_SUITE=OFF \
             -DQL_BUILD_EXAMPLES=OFF \
             -DQL_BUILD_BENCHMARK=OFF \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../QuantLib-Risks-Cpp" \
-            -DQLRISKS_DISABLE_AAD=ON \
-            -DQLRISKS_BUILD_BENCHMARK_FD=ON
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../QuantLibAAD" \
+            -DQLAAD_DISABLE_AAD=ON \
+            -DQLAAD_BUILD_BENCHMARK_FD=ON
 
       - name: Build FD benchmark (plain double)
         run: |
@@ -202,7 +202,7 @@ jobs:
         run: |
           echo "===== FD BENCHMARK (plain double QuantLib) ====="
           cd QuantLib/build-double
-          ./QuantLib-Risks-Cpp/test-suite/benchmark-fd --all 2>&1 | tee fd_results.txt
+          ./QuantLibAAD/test-suite/benchmark-fd --all 2>&1 | tee fd_results.txt
 
       # =========================================================================
       # Benchmark 3: XAD (JIT disabled) for XAD tape AAD
@@ -219,14 +219,14 @@ jobs:
             -DXAD_NO_THREADLOCAL=ON \
             -DXAD_SIMD_OPTION=AVX2 \
             -DXAD_ENABLE_JIT=OFF \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../QuantLib-Risks-Cpp" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../QuantLibAAD" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DQL_BUILD_TEST_SUITE=OFF \
             -DQL_BUILD_EXAMPLES=OFF \
             -DQL_BUILD_BENCHMARK=OFF \
-            -DQLRISKS_DISABLE_AAD=OFF \
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+            -DQLAAD_DISABLE_AAD=OFF \
+            -DQLAAD_BUILD_BENCHMARK_AAD=ON
 
       - name: Build XAD benchmark (JIT off)
         run: |
@@ -237,7 +237,7 @@ jobs:
         run: |
           echo "===== XAD BENCHMARK (XAD-Full + XAD) ====="
           cd QuantLib/build-xad
-          ./QuantLib-Risks-Cpp/test-suite/benchmark-aad --all --xad-only 2>&1 | tee xad_results.txt
+          ./QuantLibAAD/test-suite/benchmark-aad --all --xad-only 2>&1 | tee xad_results.txt
 
       # =========================================================================
       # Combine and display results
@@ -438,10 +438,10 @@ jobs:
           ref: ${{ env.XAD_FORGE_BRANCH }}
           path: xad-forge
 
-      - name: Checkout QuantLib-Risks-Cpp
+      - name: Checkout QuantLibAAD
         uses: actions/checkout@v4
         with:
-          path: QuantLib-Risks-Cpp
+          path: QuantLibAAD
 
       - name: Setup
         run: choco install -y ninja
@@ -487,17 +487,17 @@ jobs:
             -DXAD_ENABLE_JIT=ON ^
             -DXAD_STATIC_MSVC_RUNTIME=ON ^
             -DCMAKE_PREFIX_PATH=%CD%\..\install ^
-            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\xad-forge;%CD%\..\QuantLib-Risks-Cpp" ^
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\xad-forge;%CD%\..\QuantLibAAD" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
             -DQL_NULL_AS_FUNCTIONS=ON ^
             -DQL_BUILD_TEST_SUITE=OFF ^
             -DQL_BUILD_EXAMPLES=OFF ^
             -DQL_BUILD_BENCHMARK=OFF ^
-            -DQLRISKS_DISABLE_AAD=OFF ^
-            -DQLRISKS_ENABLE_FORGE=ON ^
-            -DQLRISKS_USE_FORGE_CAPI=ON ^
+            -DQLAAD_DISABLE_AAD=OFF ^
+            -DQLAAD_ENABLE_FORGE=ON ^
+            -DQLAAD_USE_FORGE_CAPI=ON ^
             -DXAD_FORGE_USE_CAPI=ON ^
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+            -DQLAAD_BUILD_BENCHMARK_AAD=ON
 
       - name: Build Forge benchmark (JIT on)
         shell: cmd
@@ -512,7 +512,7 @@ jobs:
           echo ===== FORGE BENCHMARK (Forge + Forge-AVX) =====
           cd QuantLib\build-forge
           set PATH=%CD%\..\..\install\bin;%PATH%
-          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all > forge_results.txt 2>&1
+          QuantLibAAD\test-suite\benchmark-aad.exe --all > forge_results.txt 2>&1
           type forge_results.txt
 
       - name: Run XAD vs Forge Diagnostic
@@ -521,7 +521,7 @@ jobs:
           echo ===== DIAGNOSTIC: XAD vs Forge Derivative Comparison =====
           cd QuantLib\build-forge
           set PATH=%CD%\..\..\install\bin;%PATH%
-          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --diagnose --diagnose-paths=100 > diagnostic_results.txt 2>&1
+          QuantLibAAD\test-suite\benchmark-aad.exe --diagnose --diagnose-paths=100 > diagnostic_results.txt 2>&1
           type diagnostic_results.txt
 
       # =========================================================================
@@ -538,9 +538,9 @@ jobs:
             -DQL_BUILD_TEST_SUITE=OFF ^
             -DQL_BUILD_EXAMPLES=OFF ^
             -DQL_BUILD_BENCHMARK=OFF ^
-            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\QuantLib-Risks-Cpp" ^
-            -DQLRISKS_DISABLE_AAD=ON ^
-            -DQLRISKS_BUILD_BENCHMARK_FD=ON
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\QuantLibAAD" ^
+            -DQLAAD_DISABLE_AAD=ON ^
+            -DQLAAD_BUILD_BENCHMARK_FD=ON
 
       - name: Build FD benchmark (plain double)
         shell: cmd
@@ -554,7 +554,7 @@ jobs:
         run: |
           echo ===== FD BENCHMARK (plain double QuantLib) =====
           cd QuantLib\build-double
-          QuantLib-Risks-Cpp\test-suite\benchmark-fd.exe --all > fd_results.txt 2>&1
+          QuantLibAAD\test-suite\benchmark-fd.exe --all > fd_results.txt 2>&1
           type fd_results.txt
 
       # =========================================================================
@@ -574,14 +574,14 @@ jobs:
             -DXAD_SIMD_OPTION=AVX2 ^
             -DXAD_ENABLE_JIT=OFF ^
             -DXAD_STATIC_MSVC_RUNTIME=ON ^
-            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\QuantLib-Risks-Cpp" ^
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\QuantLibAAD" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
             -DQL_NULL_AS_FUNCTIONS=ON ^
             -DQL_BUILD_TEST_SUITE=OFF ^
             -DQL_BUILD_EXAMPLES=OFF ^
             -DQL_BUILD_BENCHMARK=OFF ^
-            -DQLRISKS_DISABLE_AAD=OFF ^
-            -DQLRISKS_BUILD_BENCHMARK_AAD=ON
+            -DQLAAD_DISABLE_AAD=OFF ^
+            -DQLAAD_BUILD_BENCHMARK_AAD=ON
 
       - name: Build XAD benchmark (JIT off)
         shell: cmd
@@ -595,7 +595,7 @@ jobs:
         run: |
           echo ===== XAD BENCHMARK (XAD-Full + XAD) =====
           cd QuantLib\build-xad
-          QuantLib-Risks-Cpp\test-suite\benchmark-aad.exe --all --xad-only > xad_results.txt 2>&1
+          QuantLibAAD\test-suite\benchmark-aad.exe --all --xad-only > xad_results.txt 2>&1
           type xad_results.txt
 
       # =========================================================================

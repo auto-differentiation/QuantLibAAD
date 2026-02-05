@@ -1,10 +1,10 @@
 /*******************************************************************************
 
-   This file is part of QuantLib-Risks, an adaptor module to enable using XAD with
+   This file is part of QuantLibAAD, an adaptor module to enable using XAD with
    QuantLib. XAD is a fast and comprehensive C++ library for
    automatic differentiation.
 
-   Copyright (C) 2010-2024 Xcelerit Computing Ltd.
+   Copyright (C) 2010-2026 Xcelerit Computing Ltd.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published
@@ -40,6 +40,7 @@
 #include <type_traits>
 
 #define QL_REAL xad::AReal<double>
+#define QL_AAD 1
 #define QL_RISKS 1
 
 // QuantLib specialisations to work with expressions

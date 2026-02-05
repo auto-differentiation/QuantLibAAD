@@ -2,7 +2,7 @@
 
 /*
  Copyright (C) 2005, 2006, 2007, 2009 StatPro Italia srl
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -21,7 +21,7 @@
 
 /*
 This example shows how to price a portfolio of European equity options with
-sensitivities computed via XAD (or bumping if QLRISKS_DISABLE_AAD is ON).
+sensitivities computed via XAD (or bumping if QLAAD_DISABLE_AAD is ON).
 It measures performance and reports the times.
 
 This sample is used to validate XAD performance with an analytic engine.
@@ -107,7 +107,7 @@ Real priceEuropean(const std::vector<Date>& dates,
 }
 
 // price with XAD sensitivities
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;

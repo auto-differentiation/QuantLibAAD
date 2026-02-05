@@ -2,7 +2,7 @@
 
 This folder contains CMake user preset templates for QuantLib integration with
 XAD, which can be used in addition to the existing `CMakePresets.json` file
-that already ships with QuantLib to add additional presets for QuantLib-Risks.
+that already ships with QuantLib to add additional presets for QuantLibAAD.
 (A `CMakeUserPresets.json` can be placed beside the existing `CMakePresets.json` for user-specific local settings and is typically not checked in to Git).
 
 **Note:** If you're using QuantLib 1.31 or earlier, please use the [CMakeUserPresets-1.31.json](./CMakeUserPresets-1.31.json) file. For later versions, [CMakeUserPresets.json](./CMakeUserPresets.json) should be used.
@@ -33,8 +33,8 @@ And the following presets for Linux (both for Make and Ninja builders):
 - `linux-xad-gcc-ninja-relwithdebinfo`
 
 Additionally, for each of the presets listed above, there is a `*-noxad-*` version
-provided as well. This sets `QLRISKS_DISABLE_ADD` to `ON`, reverting to the standard `double`
-for QuantLib's Real but compiling the examples within the `QuantLib-Risks-Cpp` repository.
+provided as well. This sets `QLAAD_DISABLE_AAD` to `ON`, reverting to the standard `double`
+for QuantLib's Real but compiling the examples within the `QuantLibAAD` repository.
 This enabled benchmarking / comparisons of the same examples with XAD disabled.
 
 ## Usage
@@ -75,7 +75,7 @@ cmake --build .
 The top section in the presets file sets the base configuration for using XAD.
 It has the settings for `QL_EXTERNAL_SUBDIRECTORIES`, etc.
 These can be adjusted to your needs, pointing to the relevant folders
-where you checked out QuantLib-Risks-Cpp and XAD.
+where you checked out QuantLibAAD and XAD.
 
 You can also add settings here about the boost location (`BOOST_ROOT`) or other
 QuantLib or XAD related CMake settings.

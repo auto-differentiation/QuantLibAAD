@@ -1,6 +1,6 @@
 /*******************************************************************************
  *
- *  QuantLib-Risks Swaption Benchmark - AAD Runner
+ *  QuantLibAAD Swaption Benchmark - AAD Runner
  *
  *  AAD benchmarks using XAD tape, Forge JIT, and Forge JIT-AVX.
  *  This executable is compiled WITH XAD (and optionally Forge).
@@ -10,7 +10,7 @@
  *
  *  Output format is designed to be parsed and combined with FD results.
  *
- *  Copyright (C) 2025 Xcelerit Computing Limited
+ *  Copyright (C) 2010-2026 Xcelerit Computing Limited
  *  SPDX-License-Identifier: AGPL-3.0-or-later
  *
  ******************************************************************************/
@@ -22,7 +22,7 @@
 #include <XAD/XAD.hpp>
 
 // Forge JIT backends (conditionally included)
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
 #include <xad-forge/ForgeBackend.hpp>
 #include <xad-forge/ForgeBackendAVX.hpp>
 #endif
@@ -35,7 +35,7 @@ using namespace benchmark;
 using Clock = std::chrono::high_resolution_clock;
 using DurationMs = std::chrono::duration<double, std::milli>;
 
-// Use QuantLib's Real which is xad::AReal<double> via qlrisks.hpp
+// Use QuantLib's Real which is xad::AReal<double> via qlaad.hpp
 using RealAD = QuantLib::Real;
 using tape_type = RealAD::tape_type;
 
@@ -1291,7 +1291,7 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
     fixed_cost_mean = computeMean(fixed_times);
 }
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
 
 // ============================================================================
 // Forward declaration for recordJITGraph (defined later)
@@ -2477,7 +2477,7 @@ void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
     phase3_compile_mean = computeMean(phase3_times);
 }
 
-#endif // QLRISKS_HAS_FORGE
+#endif // QLAAD_HAS_FORGE
 
 // ============================================================================
 // XAD-Split Benchmark (CVA) - per-path tape recording
@@ -2678,7 +2678,7 @@ std::vector<TimingResult> runAADBenchmark(const BenchmarkConfig& config,
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
         if (!xadOnly)
         {
             // Forge JIT
@@ -2774,7 +2774,7 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
         if (!xadOnly)
         {
             // Forge JIT (dual-curve)
@@ -2975,7 +2975,7 @@ std::vector<TimingResult> runAADBenchmarkCVA(const BenchmarkConfig& config,
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
         if (!xadOnly)
         {
             // Forge JIT (CVA)
@@ -3042,7 +3042,7 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     }
     std::cout << std::endl;
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
     // Forge results (formerly JIT)
     std::cout << "FORGE_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
@@ -3161,7 +3161,7 @@ int main(int argc, char* argv[])
     printHeader();
     printEnvironment();
 
-#if defined(QLRISKS_HAS_FORGE)
+#if defined(QLAAD_HAS_FORGE)
     // Run diagnostic comparison if requested
     if (runDiagnose)
     {

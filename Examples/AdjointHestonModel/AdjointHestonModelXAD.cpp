@@ -1,7 +1,7 @@
 /* -*- mode: c++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 
 /*
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -162,7 +162,7 @@ Real priceHestonModel(ext::shared_ptr<QuantLib::HestonModel>& model,
 }
 
 // price with sensitivities
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;
@@ -285,7 +285,7 @@ int main() {
 
         std::cout.precision(6);
 
-#ifdef QLRISKS_DISABLE_AAD
+#ifdef QLAAD_DISABLE_AAD
         std::cout << "Pricing with Heston COS engine, no sensitivities...\n";
         auto model = HestonModelCalibration(dates, rates, dividendYield, dayCounter, calendar, t, v,
                                             strike, s0, settlementDate);

@@ -6,7 +6,7 @@ by our [code of conduct](CODE_OF_CONDUCT.md).
 1.  Fork, then clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/QuantLib-Risks-Cpp.git
+git clone https://github.com/yourusername/QuantLibAAD.git
 ```
 
 2.  Follow the [Build Instructions](README.md) to setup the dependencies and 
@@ -53,6 +53,6 @@ accepted:
 
 This repository follows [QuantLib's coding style](https://www.quantlib.org/style.shtml).
 
-[pr]: https://github.com/auto-differentiation/QuantLib-Risks-Cpp/compare/
+[pr]: https://github.com/auto-differentiation/QuantLibAAD/compare/
 
 [cla]: https://gist.github.com/auto-differentiation-dev/ee51f6c0a3365ae2fc2489e092366de2

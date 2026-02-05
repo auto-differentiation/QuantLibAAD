@@ -5,8 +5,8 @@
             "name": "_xad-base",
             "hidden": true,
             "cacheVariables": {
-                "QL_EXTERNAL_SUBDIRECTORIES":"${sourceDir}/../xad;${sourceDir}/../QuantLib-Risks-Cpp",
-                "QL_EXTRA_LINK_LIBRARIES": "QuantLib-Risks",
+                "QL_EXTERNAL_SUBDIRECTORIES":"${sourceDir}/../xad;${sourceDir}/../QuantLibAAD",
+                "QL_EXTRA_LINK_LIBRARIES": "QuantLibAAD",
                 "QL_NULL_AS_FUNCTIONS": "ON",
                 "XAD_STATIC_MSVC_RUNTIME": "ON",
                 "XAD_NO_THREADLOCAL": "ON"
@@ -17,7 +17,7 @@
             "hidden": true,
             "inherits": "_xad-base",
             "cacheVariables": {
-                "QLRISKS_DISABLE_AAD": "OFF"
+                "QLAAD_DISABLE_AAD": "OFF"
             }
         },
         {
@@ -25,7 +25,7 @@
             "hidden": true,
             "inherits": "_xad-base",
             "cacheVariables": {
-                "QLRISKS_DISABLE_AAD": "ON"
+                "QLAAD_DISABLE_AAD": "ON"
             }
         },
         {

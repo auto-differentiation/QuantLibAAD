@@ -4,7 +4,7 @@
  Copyright (C) 2002, 2003 Sadruddin Rejeb
  Copyright (C) 2004 Ferdinando Ametrano
  Copyright (C) 2005, 2006, 2007 StatPro Italia srl
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -170,7 +170,7 @@ Real priceSwaption(const std::vector<Integer>& swapLengths,
 
 
 // Sensitivities with XAD
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;
@@ -242,7 +242,7 @@ int main(int argc, char* argv[]) {
             0.1040, 0.1149, 0.1112, 0.1070, 0.1010, 0.0957, 0.1047, 0.1021, 0.0980,
             0.0951, 0.1270, 0.1000, 0.0950, 0.0900, 0.1230, 0.1160};
 
-#ifdef QLRISKS_DISABLE_AAD
+#ifdef QLAAD_DISABLE_AAD
         std::cout << "Pricing Bermudan swaption without sensitivities...\n";
         Real price = priceSwaption(swapLengths, swaptionVols, numRows, numCols, flatRate);
         std::cout << "Price = " << price << std::endl;

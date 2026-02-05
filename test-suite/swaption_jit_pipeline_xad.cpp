@@ -1,9 +1,9 @@
 /* -*- mode: c++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 
 /*
- Copyright (C) 2025 Xcelerit Computing Limited
+ Copyright (C) 2010-2026 Xcelerit Computing Limited
 
- This file is part of QuantLib-Risks / XAD / Forge integration.
+ This file is part of QuantLibAAD / XAD / Forge integration.
 
  Tests for the XAD-QuantLib JIT Integration Pipeline:
  - Stage 1: Curve Bootstrapping (XAD Tape Mode)
@@ -58,7 +58,7 @@
 using namespace QuantLib;
 using namespace boost::unit_test_framework;
 
-BOOST_FIXTURE_TEST_SUITE(QuantLibRisksTests, TopLevelFixture)
+BOOST_FIXTURE_TEST_SUITE(QuantLibAADTests, TopLevelFixture)
 
 BOOST_AUTO_TEST_SUITE(SwaptionJITPipelineTests)
 
