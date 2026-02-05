@@ -569,7 +569,7 @@ jobs:
             -DCMAKE_CXX_STANDARD=17 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DXAD_WARNINGS_PARANOID=OFF ^
-            -DXAD_USE_STRONG_INLINE=ON ^
+            -DXAD_USE_STRONG_INLINE=OFF ^
             -DXAD_NO_THREADLOCAL=ON ^
             -DXAD_SIMD_OPTION=AVX2 ^
             -DXAD_ENABLE_JIT=OFF ^
