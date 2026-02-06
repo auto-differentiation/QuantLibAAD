@@ -1,11 +1,11 @@
 /*******************************************************************************
  *
- *  QuantLib-Risks Swaption Benchmark - Templated Pricing Functions
+ *  QuantLibAAD Swaption Benchmark - Templated Pricing Functions
  *
  *  Core pricing logic templated on the Real type (double or AReal<double>).
  *  This allows the same code to be used for both FD and AAD benchmarks.
  *
- *  Copyright (C) 2025 Xcelerit Computing Limited
+ *  Copyright (C) 2010-2026 Xcelerit Computing Limited
  *  SPDX-License-Identifier: AGPL-3.0-or-later
  *
  ******************************************************************************/

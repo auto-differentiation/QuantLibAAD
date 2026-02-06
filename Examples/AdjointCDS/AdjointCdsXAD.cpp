@@ -3,7 +3,7 @@
 /*!
  Copyright (C) 2008 Jose Aparicio
  Copyright (C) 2014 Peter Caspers
- Copyright (C) 2023, 2024 Xcelerit Computing Limited
+ Copyright (C) 2023-2026 Xcelerit Computing Limited
 
  This file is part of QuantLib / XAD integration module.
  It is modified from QuantLib, a free-software/open-source library
@@ -81,7 +81,7 @@ Real priceCDS(const std::vector<Real>& hazardRates,
 }
 
 // Sensitivities with XAD
-#ifndef QLRISKS_DISABLE_AAD
+#ifndef QLAAD_DISABLE_AAD
 
 // create tape
 using tape_type = Real::tape_type;
@@ -177,7 +177,7 @@ int main() {
             dates.push_back(today + tn[i]);
         }
 
-#ifdef QLRISKS_DISABLE_AAD
+#ifdef QLAAD_DISABLE_AAD
         std::cout << "Pricing a CDS without sensitivities...\n";
         Real v = priceCDS(hazardRates, dates, riskFreeRate, issueDate, maturity, recoveryRate,
                           fixedRate, calendar, dayCount, notional);

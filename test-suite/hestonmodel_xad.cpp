@@ -1,7 +1,7 @@
 // /* -*- mode: c++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 
 // /*
-//  Copyright (C) 2023, 2024 Xcelerit Computing Limited
+//  Copyright (C) 2023-2026 Xcelerit Computing Limited
 
 //  This file is part of QuantLib / XAD integration module.
 //  It is modified from QuantLib, a free-software/open-source library
@@ -44,7 +44,7 @@
 using namespace QuantLib;
 using namespace boost::unit_test_framework;
 
-BOOST_FIXTURE_TEST_SUITE(QuantLibRisksTests, TopLevelFixture)
+BOOST_FIXTURE_TEST_SUITE(QuantLibAADTests, TopLevelFixture)
 
 BOOST_AUTO_TEST_SUITE(HestonModelXadTest)
 

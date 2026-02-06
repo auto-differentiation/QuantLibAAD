@@ -1,10 +1,10 @@
 /*******************************************************************************
  *
- *  QuantLib-Risks Swaption Benchmark - Common Header
+ *  QuantLibAAD Swaption Benchmark - Common Header
  *
  *  Shared utilities, configuration, and output formatting for the benchmark.
  *
- *  Copyright (C) 2025 Xcelerit Computing Limited
+ *  Copyright (C) 2010-2026 Xcelerit Computing Limited
  *  SPDX-License-Identifier: AGPL-3.0-or-later
  *
  ******************************************************************************/
@@ -425,7 +425,7 @@ inline std::string formatPathCount(int paths)
 inline void printHeader()
 {
     std::cout << "================================================================================\n";
-    std::cout << "  QuantLib-Risks Swaption Benchmark\n";
+    std::cout << "  QuantLibAAD Swaption Benchmark\n";
     std::cout << "================================================================================\n";
     std::cout << "\n";
 }

@@ -5,9 +5,9 @@
    This header provides cross-platform functions for detecting and reporting
    system information such as CPU, memory, OS, compiler, and SIMD capabilities.
 
-   Adapted from XAD's PlatformInfo.hpp for QuantLib-Risks benchmarks.
+   Adapted from XAD's PlatformInfo.hpp for QuantLibAAD benchmarks.
 
-   Copyright (C) 2010-2025 Xcelerit Computing Ltd.
+   Copyright (C) 2010-2026 Xcelerit Computing Ltd.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Affero General Public License as published

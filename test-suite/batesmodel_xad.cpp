@@ -45,7 +45,7 @@
 using namespace QuantLib;
 using namespace boost::unit_test_framework;
 
-BOOST_FIXTURE_TEST_SUITE(QuantLibRisksTests, TopLevelFixture)
+BOOST_FIXTURE_TEST_SUITE(QuantLibAADTests, TopLevelFixture)
 
 BOOST_AUTO_TEST_SUITE(BatesModelXadTests)
 

@@ -20,7 +20,7 @@
  FOR A PARTICULAR PURPOSE.  See the license for more details.
 */
 
-#define BOOST_TEST_MODULE QuantLibRisksTests
+#define BOOST_TEST_MODULE QuantLibAADTests
 
 #include <boost/test/included/unit_test.hpp>
 

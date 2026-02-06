@@ -68,7 +68,7 @@ using QuantLib::value;
 #define LENGTH(a) (sizeof(a) / sizeof(a[0]))
 
 // make test names pretty before registering them
-#define QLRISKS_TEST_CASE(f)                                        \
+#define QLAAD_TEST_CASE(f)                                        \
     BOOST_TEST_CASE_NAME(QuantLib::detail::quantlib_test_case(f), \
                          QuantLib::detail::extract_test_name(BOOST_STRINGIZE(f)))
 

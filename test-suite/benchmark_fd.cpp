@@ -1,6 +1,6 @@
 /*******************************************************************************
  *
- *  QuantLib-Risks Swaption Benchmark - FD Runner
+ *  QuantLibAAD Swaption Benchmark - FD Runner
  *
  *  Finite Differences benchmark using plain double QuantLib.
  *  This executable is compiled WITHOUT XAD to ensure fair FD comparison.
@@ -10,7 +10,7 @@
  *
  *  Output format is designed to be parsed and combined with AAD results.
  *
- *  Copyright (C) 2025 Xcelerit Computing Limited
+ *  Copyright (C) 2010-2026 Xcelerit Computing Limited
  *  SPDX-License-Identifier: AGPL-3.0-or-later
  *
  ******************************************************************************/
