@@ -1,0 +1,197 @@
+##############################################################################
+#
+#  Type Overhead Benchmark: double vs xad::AReal<double>
+#
+#  Measures the passive-mode overhead of xad::AReal<double> vs plain double
+#  for pricing-only workloads (no derivatives, no tape recording).
+#
+#  Both types use the same templated priceSwaption<T>() code, compiled into
+#  a single binary for a fair comparison.
+#
+#  Only requires QuantLib + XAD (no Forge).
+#
+#  Copyright (C) 2025 Xcelerit Computing Limited
+#  SPDX-License-Identifier: AGPL-3.0-or-later
+#
+##############################################################################
+
+name: Type Overhead Benchmark
+
+on:
+  push:
+    branches:
+      - main
+      - forge
+  pull_request:
+    branches:
+      - main
+      - forge
+  workflow_dispatch:
+
+env:
+  QL_REPO: lballabio/QuantLib
+  QL_BRANCH: master
+  XAD_REPO: auto-differentiation/xad
+  XAD_BRANCH: main
+
+jobs:
+  ##############################################################################
+  # Linux
+  ##############################################################################
+  linux:
+    name: Linux, double vs AReal
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/lballabio/quantlib-devenv:rolling
+
+    steps:
+      - name: Hardware Info
+        run: |
+          echo "===== CPU ====="
+          lscpu | grep -E "^(Model name|CPU\(s\)|Thread|Core|Socket|CPU max MHz)"
+          echo "===== Memory ====="
+          free -h
+
+      - name: Checkout QuantLib
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.QL_REPO }}
+          ref: ${{ env.QL_BRANCH }}
+          path: QuantLib
+
+      - name: Checkout XAD
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_REPO }}
+          ref: ${{ env.XAD_BRANCH }}
+          path: xad
+
+      - name: Checkout QuantLib-Risks-Cpp
+        uses: actions/checkout@v4
+        with:
+          path: QuantLib-Risks-Cpp
+
+      - name: Setup
+        run: |
+          apt-get update
+          apt-get install -y ninja-build cmake
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.12
+        with:
+          key: linux-type-overhead
+          max-size: 1G
+
+      - name: Configure QuantLib (XAD)
+        run: |
+          cd QuantLib
+          cmake -B build -G Ninja -DBOOST_ROOT=/usr \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DXAD_WARNINGS_PARANOID=OFF \
+            -DXAD_ENABLE_JIT=OFF \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../xad;$(pwd)/../QuantLib-Risks-Cpp" \
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks \
+            -DQL_NULL_AS_FUNCTIONS=ON \
+            -DQL_BUILD_TEST_SUITE=OFF \
+            -DQL_BUILD_EXAMPLES=OFF \
+            -DQL_BUILD_BENCHMARK=OFF \
+            -DQLRISKS_DISABLE_AAD=OFF \
+            -DQLRISKS_BUILD_BENCHMARK_OVERHEAD=ON
+
+      - name: Build
+        run: |
+          cd QuantLib/build
+          cmake --build . --target benchmark_overhead
+
+      - name: Run Type Overhead Benchmark
+        run: |
+          cd QuantLib/build
+          ./QuantLib-Risks-Cpp/test-suite/benchmark-overhead --all 2>&1 | tee overhead_results.txt
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-overhead-results
+          path: QuantLib/build/overhead_results.txt
+
+  ##############################################################################
+  # Windows
+  ##############################################################################
+  windows:
+    name: Windows, double vs AReal
+    runs-on: windows-2022
+
+    env:
+      VSVARSALL: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+
+    steps:
+      - name: Checkout QuantLib
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.QL_REPO }}
+          ref: ${{ env.QL_BRANCH }}
+          path: QuantLib
+
+      - name: Checkout XAD
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.XAD_REPO }}
+          ref: ${{ env.XAD_BRANCH }}
+          path: xad
+
+      - name: Checkout QuantLib-Risks-Cpp
+        uses: actions/checkout@v4
+        with:
+          path: QuantLib-Risks-Cpp
+
+      - name: Setup
+        run: choco install -y ninja
+
+      - name: Setup Boost
+        run: |
+          $Url = "https://downloads.sourceforge.net/project/boost/boost-binaries/1.86.0/boost_1_86_0-msvc-14.3-64.exe"
+          (New-Object System.Net.WebClient).DownloadFile($Url, "$RUNNER_TEMP\boost.exe")
+          Start-Process -Wait -FilePath "$RUNNER_TEMP\boost.exe" "/SILENT","/SP-","/SUPPRESSMSGBOXES","/DIR=C:\local\boost"
+          echo "BOOST_ROOT=C:\local\boost" >> $env:GITHUB_ENV
+
+      - name: Configure QuantLib (XAD)
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib
+          cmake -B build -G Ninja ^
+            -DCMAKE_CXX_STANDARD=17 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DXAD_WARNINGS_PARANOID=OFF ^
+            -DXAD_ENABLE_JIT=OFF ^
+            -DXAD_STATIC_MSVC_RUNTIME=ON ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%CD%\..\xad;%CD%\..\QuantLib-Risks-Cpp" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLib-Risks ^
+            -DQL_NULL_AS_FUNCTIONS=ON ^
+            -DQL_BUILD_TEST_SUITE=OFF ^
+            -DQL_BUILD_EXAMPLES=OFF ^
+            -DQL_BUILD_BENCHMARK=OFF ^
+            -DQLRISKS_DISABLE_AAD=OFF ^
+            -DQLRISKS_BUILD_BENCHMARK_OVERHEAD=ON
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "%VSVARSALL%" x64
+          cd QuantLib\build
+          cmake --build . --target benchmark_overhead
+
+      - name: Run Type Overhead Benchmark
+        shell: cmd
+        run: |
+          cd QuantLib\build
+          QuantLib-Risks-Cpp\test-suite\benchmark-overhead.exe --all > overhead_results.txt 2>&1
+          type overhead_results.txt
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-overhead-results
+          path: QuantLib\build\overhead_results.txt

@@ -113,3 +113,25 @@ if(QLAAD_BUILD_BENCHMARK_AAD)
         install(TARGETS benchmark_aad RUNTIME DESTINATION ${QL_INSTALL_BINDIR})
     endif()
 endif()
+
+# Type overhead benchmark - Compares double vs AReal<double> pricing-only
+# Built with XAD-enabled QuantLib (needs AReal<double> available)
+option(QLRISKS_BUILD_BENCHMARK_OVERHEAD "Build type overhead benchmark (double vs AReal pricing)" OFF)
+if(QLRISKS_BUILD_BENCHMARK_OVERHEAD)
+    message(STATUS "QLRisks: Building type overhead benchmark (double vs AReal)")
+    add_executable(benchmark_overhead
+        benchmark_type_overhead.cpp
+        benchmark_common.hpp
+        benchmark_pricing.hpp
+        PlatformInfo.hpp
+    )
+    set_target_properties(benchmark_overhead PROPERTIES
+        OUTPUT_NAME "benchmark-overhead")
+    target_link_libraries(benchmark_overhead PRIVATE
+        ql_library
+        ${QL_THREAD_LIBRARIES})
+
+    if (QL_INSTALL_TEST_SUITE)
+        install(TARGETS benchmark_overhead RUNTIME DESTINATION ${QL_INSTALL_BINDIR})
+    endif()
+endif()
