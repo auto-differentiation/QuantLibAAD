@@ -5,7 +5,7 @@
 #  QuantLib. XAD is a fast and comprehensive C++ library for
 #  automatic differentiation.
 #
-#  Copyright (C) 2010-2026 Xcelerit Computing Ltd.
+#  Copyright (C) 2010-2024 Xcelerit Computing Ltd.
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU Affero General Public License as published
@@ -23,24 +23,23 @@
 ##############################################################################
 
 set(QLAAD_HEADERS
-    qlaad.hpp
+    QLAAD.hpp
 )
 add_library(QuantLibAAD INTERFACE)
-add_library(QuantLib-Risks ALIAS QuantLibAAD)  # for compatibility
 target_include_directories(QuantLibAAD INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
     $<INSTALL_INTERFACE:${QL_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(QuantLibAAD INTERFACE cxx_std_14)
 if(NOT QLAAD_DISABLE_AAD)
-    target_compile_definitions(QuantLibAAD INTERFACE QL_INCLUDE_FIRST=ql/qlaad.hpp)
+    target_compile_definitions(QuantLibAAD INTERFACE QL_INCLUDE_FIRST=ql/QLAAD.hpp)
 else()
     target_compile_definitions(QuantLibAAD INTERFACE QLAAD_DISABLE_AAD=1)
 endif()
-target_link_libraries(QuantLibAAD INTERFACE XAD::xad)
 if(MSVC)
     target_compile_options(QuantLibAAD INTERFACE /bigobj)
 endif()
+target_link_libraries(QuantLibAAD INTERFACE XAD::xad)
 set_target_properties(QuantLibAAD PROPERTIES
     EXPORT_NAME QuantLibAAD
 )
@@ -62,7 +61,7 @@ endforeach()
 #
 
 set(QLAAD_INSTALL_CMAKEDIR "lib/cmake/QuantLibAAD" CACHE STRING
-    "Installation directory for CMake scripts for QuantLib AAD")
+    "Installation directory for CMake scripts for QuantLib XAD")
 
 include(CMakePackageConfigHelpers)
 configure_file("../cmake/QuantLibAADConfig.cmake.in"
@@ -74,18 +73,5 @@ configure_package_config_file("../cmake/QuantLibAADConfig.cmake.in"
     INSTALL_DESTINATION "${QLAAD_INSTALL_CMAKEDIR}"
 )
 install(FILES "${PROJECT_BINARY_DIR}/cmake/QuantLibAADConfig.cmake"
-    DESTINATION "${QLAAD_INSTALL_CMAKEDIR}"
-)
-
-# the following is purely for compatibility - it will be removed in the near future
-configure_file("../cmake/QuantLibAADConfig.cmake.in"
-    "${PROJECT_BINARY_DIR}/cmake/QuantLib-RisksConfig.cmake"
-    COPYONLY
-)
-configure_package_config_file("../cmake/QuantLibAADConfig.cmake.in"
-    "${PROJECT_BINARY_DIR}/cmake/QuantLib-RisksConfig.cmake"
-    INSTALL_DESTINATION "${QLAAD_INSTALL_CMAKEDIR}"
-)
-install(FILES "${PROJECT_BINARY_DIR}/cmake/QuantLib-RisksConfig.cmake"
     DESTINATION "${QLAAD_INSTALL_CMAKEDIR}"
 )
