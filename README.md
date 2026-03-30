@@ -20,9 +20,9 @@ It is not usable stand-alone.
 
 ## JIT Compilation Support
 
-XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios—such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis—XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/xad/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend. The [xad-forge](https://github.com/da-roth/xad-forge) library provides Forge-based backends for this purpose, including vectorized AVX execution. See the [xad-forge README](https://github.com/da-roth/xad-forge#when-to-use-jit) for guidance on when JIT compilation is beneficial.
+XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios — such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis — XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/xad/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend.
 
-The repository includes a [swaption benchmark](.github/workflows/ql-benchmarks.yaml) that demonstrates a hybrid workflow: curve bootstrapping with XAD's tape, followed by Monte Carlo pricing with JIT-compiled evaluation, comparing tape-based, JIT, and JIT-AVX performance.
+**xad-codegen** is a high-performance native code generation backend that compiles recorded computation graphs to optimized x86-64 machine code, with support for AVX2 SIMD vectorization (4 paths per instruction). xad-codegen is available under a separate commercial license — [contact us](https://www.xcelerit.com/xad-enterprise-support) for more information.
 
 ## Getting Started
 

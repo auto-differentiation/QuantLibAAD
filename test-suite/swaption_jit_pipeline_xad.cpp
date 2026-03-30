@@ -3,7 +3,7 @@
 /*
  Copyright (C) 2010-2026 Xcelerit Computing Limited
 
- This file is part of QuantLibAAD / XAD / Forge integration.
+ This file is part of QuantLibAAD / XAD / Codegen integration.
 
  Tests for the XAD-QuantLib JIT Integration Pipeline:
  - Stage 1: Curve Bootstrapping (XAD Tape Mode)
@@ -51,9 +51,9 @@
 #include <vector>
 #include <map>
 
-// Forge JIT backends
-#include <xad-forge/ForgeBackend.hpp>
-#include <xad-forge/ForgeBackendAVX.hpp>
+// Codegen JIT backends
+#include <xad/CodegenBackend.hpp>
+#include <xad/CodegenBackendAVX.hpp>
 
 using namespace QuantLib;
 using namespace boost::unit_test_framework;
@@ -822,8 +822,8 @@ BOOST_AUTO_TEST_CASE(testStage2_Comparison)
     // APPROACH 5: JIT - Custom loop with JIT
     // JIT also uses zero curve rates as inputs for fair comparison
     // =========================================================================
-    auto forgeBackend3 = std::make_unique<xad::forge::ForgeBackend<double>>();
-    xad::JITCompiler<double> jit(std::move(forgeBackend3));
+    auto codegenBackend3 = std::make_unique<xad::codegen::CodegenBackend<double>>();
+    xad::JITCompiler<double> jit(std::move(codegenBackend3));
 
     // Register 10 zero curve rates as JIT inputs
     std::vector<xad::AD> jit_zeroRates(numZeroRates);
@@ -1754,9 +1754,9 @@ BOOST_AUTO_TEST_CASE(testStage3_CombinedPipeline)
     // Deactivate tape for JIT
     tape2.deactivate();
 
-    // JIT setup with ForgeBackend
-    auto forgeBackend4 = std::make_unique<xad::forge::ForgeBackend<double>>();
-    xad::JITCompiler<double> jit(std::move(forgeBackend4));
+    // JIT setup with CodegenBackend
+    auto codegenBackend4 = std::make_unique<xad::codegen::CodegenBackend<double>>();
+    xad::JITCompiler<double> jit(std::move(codegenBackend4));
 
     std::vector<xad::AD> jit_initRates(size);
     xad::AD jit_swapRate;
@@ -3129,9 +3129,9 @@ BOOST_AUTO_TEST_CASE(testStage4_Benchmarks)
             // --- JIT kernel recording (build JIT graph) ---
             auto t_kernel_record_start = Clock::now();
 
-            // Use ForgeBackend without graph optimizations
-            auto forgeBackendSlow = std::make_unique<xad::forge::ForgeBackend<double>>(false);
-            xad::JITCompiler<double> jit(std::move(forgeBackendSlow));
+            // Use CodegenBackend without graph optimizations
+            auto codegenBackendSlow = std::make_unique<xad::codegen::CodegenBackend<double>>(false);
+            xad::JITCompiler<double> jit(std::move(codegenBackendSlow));
 
             std::vector<xad::AD> jit_initRates(size);
             xad::AD jit_swapRate;
@@ -3426,12 +3426,12 @@ BOOST_AUTO_TEST_CASE(testStage4_Benchmarks)
 
             auto t_boot_bwd_end = Clock::now();
 
-            // --- JIT kernel recording (build JIT graph with Forge Fast config) ---
+            // --- JIT kernel recording (build JIT graph with Codegen Fast config) ---
             auto t_kernel_record_start = Clock::now();
 
-            // Use ForgeBackend with graph optimizations enabled
-            auto forgeBackendFast = std::make_unique<xad::forge::ForgeBackend<double>>(true);
-            xad::JITCompiler<double> jit(std::move(forgeBackendFast));
+            // Use CodegenBackend with graph optimizations enabled
+            auto codegenBackendFast = std::make_unique<xad::codegen::CodegenBackend<double>>(true);
+            xad::JITCompiler<double> jit(std::move(codegenBackendFast));
 
             std::vector<xad::AD> jit_initRates(size);
             xad::AD jit_swapRate;
@@ -4029,8 +4029,8 @@ BOOST_AUTO_TEST_CASE(testStage4_Benchmarks)
             auto t_kernel_record_start = Clock::now();
 
             // Build JIT graph for single path (same as JIT Slow)
-            auto forgeBackendAVX = std::make_unique<xad::forge::ForgeBackend<double>>(false);
-            xad::JITCompiler<double> jit(std::move(forgeBackendAVX));
+            auto codegenBackendAVX = std::make_unique<xad::codegen::CodegenBackend<double>>(false);
+            xad::JITCompiler<double> jit(std::move(codegenBackendAVX));
 
             std::vector<xad::AD> jit_initRates(size);
             xad::AD jit_swapRate;
@@ -4108,7 +4108,7 @@ BOOST_AUTO_TEST_CASE(testStage4_Benchmarks)
             jit.deactivate();
 
             // Create AVX backend and compile directly from JITGraph
-            xad::forge::ForgeBackendAVX<double> avxBackend(false);
+            xad::codegen::CodegenBackendAVX<double> avxBackend(false);
             avxBackend.compile(jitGraph);
 
             auto t_kernel_compile_end = Clock::now();
@@ -4119,7 +4119,7 @@ BOOST_AUTO_TEST_CASE(testStage4_Benchmarks)
             double dPrice_dSwapRate_jit = 0.0;
 
             // Process paths in batches of 4
-            constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+            constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
             Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
             // Temporary arrays for batch processing
@@ -4976,7 +4976,7 @@ BOOST_AUTO_TEST_CASE(testStage5_ScalingBenchmarks)
             }
 
             // =================================================================
-            // JIT (RR) - ForgeBackend with full grid
+            // JIT (RR) - CodegenBackend with full grid
             // =================================================================
             {
                 auto t_start = Clock::now();
@@ -5080,8 +5080,8 @@ BOOST_AUTO_TEST_CASE(testStage5_ScalingBenchmarks)
                 tape.deactivate();
 
                 // JIT kernel creation
-                auto forgeBackend = std::make_unique<xad::forge::ForgeBackend<double>>(false);
-                xad::JITCompiler<double> jit(std::move(forgeBackend));
+                auto codegenBackend = std::make_unique<xad::codegen::CodegenBackend<double>>(false);
+                xad::JITCompiler<double> jit(std::move(codegenBackend));
 
                 std::vector<xad::AD> jit_initRates(size);
                 xad::AD jit_swapRate;
@@ -5399,7 +5399,7 @@ BOOST_AUTO_TEST_CASE(testStage5_ScalingBenchmarks)
             }
 
             // =================================================================
-            // JIT AVX (RR) - ForgeBackendAVX with 4-path batching
+            // JIT AVX (RR) - CodegenBackendAVX with 4-path batching
             // =================================================================
             {
                 auto t_start = Clock::now();
@@ -5569,7 +5569,7 @@ BOOST_AUTO_TEST_CASE(testStage5_ScalingBenchmarks)
                 jit.deactivate();
 
                 // AVX backend with 4-path batching - compiles directly from JITGraph
-                xad::forge::ForgeBackendAVX<double> avxBackend(false);
+                xad::codegen::CodegenBackendAVX<double> avxBackend(false);
                 avxBackend.compile(jitGraph);
 
                 // MC execution with 4-path batching
@@ -5577,7 +5577,7 @@ BOOST_AUTO_TEST_CASE(testStage5_ScalingBenchmarks)
                 std::vector<double> dPrice_dInitRates(size, 0.0);
                 double dPrice_dSwapRate = 0.0;
 
-                constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+                constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
                 Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
                 std::vector<double> inputBatch(BATCH_SIZE);
@@ -6198,8 +6198,8 @@ BOOST_AUTO_TEST_CASE(testStage6_ProductionLikeBenchmarks)
             }
 
             // JIT kernel creation (recording)
-            auto forgeBackend = std::make_unique<xad::forge::ForgeBackend<double>>(false);
-            xad::JITCompiler<double> jit(std::move(forgeBackend));
+            auto codegenBackend = std::make_unique<xad::codegen::CodegenBackend<double>>(false);
+            xad::JITCompiler<double> jit(std::move(codegenBackend));
 
             std::vector<xad::AD> jit_initRates(size);
             xad::AD jit_swapRate;
@@ -6338,7 +6338,7 @@ BOOST_AUTO_TEST_CASE(testStage6_ProductionLikeBenchmarks)
         }
 
         // =================================================================
-        // JIT AVX (RR) - ForgeBackendAVX with 4-path batching (with granular timing)
+        // JIT AVX (RR) - CodegenBackendAVX with 4-path batching (with granular timing)
         // =================================================================
         std::cout << " JIT-AVX..." << std::flush;
         {
@@ -6527,7 +6527,7 @@ BOOST_AUTO_TEST_CASE(testStage6_ProductionLikeBenchmarks)
             jit.deactivate();
 
             // AVX backend with 4-path batching
-            xad::forge::ForgeBackendAVX<double> avxBackend(false);
+            xad::codegen::CodegenBackendAVX<double> avxBackend(false);
             avxBackend.compile(jitGraph);
 
             if (isLast) {
@@ -6540,7 +6540,7 @@ BOOST_AUTO_TEST_CASE(testStage6_ProductionLikeBenchmarks)
             std::vector<double> dPrice_dInitRates(size, 0.0);
             double dPrice_dSwapRate = 0.0;
 
-            constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+            constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
             Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
             std::vector<double> inputBatch(BATCH_SIZE);

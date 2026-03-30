@@ -2,8 +2,8 @@
  *
  *  QuantLibAAD Swaption Benchmark - AAD Runner
  *
- *  AAD benchmarks using XAD tape, Forge JIT, and Forge JIT-AVX.
- *  This executable is compiled WITH XAD (and optionally Forge).
+ *  AAD benchmarks using XAD tape, Codegen JIT, and Codegen JIT-AVX.
+ *  This executable is compiled WITH XAD (and optionally Codegen).
  *
  *  Usage:
  *    ./benchmark_aad [--production|--cva|--all] [--quick] [--xad-only]
@@ -21,10 +21,10 @@
 // XAD includes
 #include <XAD/XAD.hpp>
 
-// Forge JIT backends (conditionally included)
-#if defined(QLAAD_HAS_FORGE)
-#include <xad-forge/ForgeBackend.hpp>
-#include <xad-forge/ForgeBackendAVX.hpp>
+// Codegen JIT backends (conditionally included)
+#if defined(QLAAD_HAS_CODEGEN)
+#include <xad/CodegenBackend.hpp>
+#include <xad/CodegenBackendAVX.hpp>
 #endif
 
 #include <chrono>
@@ -1291,7 +1291,7 @@ void runXADSplitBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup
     fixed_cost_mean = computeMean(fixed_times);
 }
 
-#if defined(QLAAD_HAS_FORGE)
+#if defined(QLAAD_HAS_CODEGEN)
 
 // ============================================================================
 // Forward declaration for recordJITGraph (defined later)
@@ -1413,7 +1413,7 @@ void runDiagnosticComparison(const BenchmarkConfig& config, const LMMSetup& setu
     // =========================================================================
     // Phase 2b: JIT - compiled kernel MC
     // =========================================================================
-    auto backend = std::make_unique<xad::forge::ForgeBackend<double>>(false);
+    auto backend = std::make_unique<xad::codegen::CodegenBackend<double>>(false);
     xad::JITCompiler<double> jit(std::move(backend));
 
     PayoffVariables<xad::AD> jit_vars;
@@ -1591,7 +1591,7 @@ void recordJITGraph(
 }
 
 // ============================================================================
-// Forge JIT Scalar Benchmark (Single-Curve)
+// Codegen JIT Scalar Benchmark (Single-Curve)
 // ============================================================================
 
 template <typename BackendType>
@@ -1671,7 +1671,7 @@ void runJITBenchmarkImpl(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGE";
+            validation->method = "CODEGEN";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1686,12 +1686,12 @@ void runJITBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
                      double& mean, double& stddev,
                      ValidationResult* validation = nullptr)
 {
-    runJITBenchmarkImpl<xad::forge::ForgeBackend<double>>(
+    runJITBenchmarkImpl<xad::codegen::CodegenBackend<double>>(
         config, setup, nrTrails, warmup, bench, mean, stddev, validation);
 }
 
 // ============================================================================
-// Forge JIT-AVX Benchmark (Single-Curve) - Batched Execution
+// Codegen JIT-AVX Benchmark (Single-Curve) - Batched Execution
 // ============================================================================
 
 void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
@@ -1720,10 +1720,10 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         jit.deactivate();
 
         // Phase 3: AVX backend compilation and batched execution
-        xad::forge::ForgeBackendAVX<double> avxBackend(false);
+        xad::codegen::CodegenBackendAVX<double> avxBackend(false);
         avxBackend.compile(jitGraph);
 
-        constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+        constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
         Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
         std::vector<double> inputBatch(BATCH_SIZE);
@@ -1810,7 +1810,7 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGEAVX";
+            validation->method = "CODEGENAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1821,7 +1821,7 @@ void runJITAVXBenchmark(const BenchmarkConfig& config, const LMMSetup& setup,
 }
 
 // ============================================================================
-// Forge JIT Benchmark (Dual-Curve) - Template Implementation
+// Codegen JIT Benchmark (Dual-Curve) - Template Implementation
 // ============================================================================
 
 template <typename BackendType>
@@ -1920,7 +1920,7 @@ void runJITBenchmarkDualCurveImpl(const BenchmarkConfig& config, const LMMSetup&
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGE";
+            validation->method = "CODEGEN";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -1940,13 +1940,13 @@ void runJITBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& set
                                double& phase3_compile_mean,
                                ValidationResult* validation = nullptr)
 {
-    runJITBenchmarkDualCurveImpl<xad::forge::ForgeBackend<double>>(
+    runJITBenchmarkDualCurveImpl<xad::codegen::CodegenBackend<double>>(
         config, setup, nrTrails, warmup, bench, mean, stddev,
         phase1_curve_mean, phase2_jacobian_mean, phase3_compile_mean, validation);
 }
 
 // ============================================================================
-// Forge JIT-AVX Benchmark (Dual-Curve) - Batched Execution
+// Codegen JIT-AVX Benchmark (Dual-Curve) - Batched Execution
 // ============================================================================
 
 void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& setup,
@@ -1982,12 +1982,12 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
         jit.deactivate();
 
         // Phase 3: AVX backend compilation and batched execution
-        xad::forge::ForgeBackendAVX<double> avxBackend(false);
+        xad::codegen::CodegenBackendAVX<double> avxBackend(false);
         avxBackend.compile(jitGraph);
 
         auto t_compile_end = Clock::now();
 
-        constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+        constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
         Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
         std::vector<double> inputBatch(BATCH_SIZE);
@@ -2095,7 +2095,7 @@ void runJITAVXBenchmarkDualCurve(const BenchmarkConfig& config, const LMMSetup& 
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGEAVX";
+            validation->method = "CODEGENAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2175,7 +2175,7 @@ void recordJITGraphCVA(
 }
 
 // ============================================================================
-// Forge JIT Benchmark (CVA) - Template Implementation
+// Codegen JIT Benchmark (CVA) - Template Implementation
 // ============================================================================
 
 template <typename BackendType>
@@ -2283,7 +2283,7 @@ void runJITBenchmarkCVAImpl(const BenchmarkConfig& config, const LMMSetup& setup
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGE";
+            validation->method = "CODEGEN";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2303,13 +2303,13 @@ void runJITBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
                          double& phase3_compile_mean,
                          ValidationResult* validation = nullptr)
 {
-    runJITBenchmarkCVAImpl<xad::forge::ForgeBackend<double>>(
+    runJITBenchmarkCVAImpl<xad::codegen::CodegenBackend<double>>(
         config, setup, nrTrails, warmup, bench, mean, stddev,
         phase1_curve_mean, phase2_jacobian_mean, phase3_compile_mean, validation);
 }
 
 // ============================================================================
-// Forge JIT-AVX Benchmark (CVA) - Batched Execution
+// Codegen JIT-AVX Benchmark (CVA) - Batched Execution
 // ============================================================================
 
 void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
@@ -2344,12 +2344,12 @@ void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
         jit.deactivate();
 
         // Phase 3: AVX backend compilation
-        xad::forge::ForgeBackendAVX<double> avxBackend(false);
+        xad::codegen::CodegenBackendAVX<double> avxBackend(false);
         avxBackend.compile(jitGraph);
 
         auto t_compile_end = Clock::now();
 
-        constexpr int BATCH_SIZE = xad::forge::ForgeBackendAVX<double>::VECTOR_WIDTH;
+        constexpr int BATCH_SIZE = xad::codegen::CodegenBackendAVX<double>::VECTOR_WIDTH;
         Size numBatches = (nrTrails + BATCH_SIZE - 1) / BATCH_SIZE;
 
         std::vector<double> inputBatch(BATCH_SIZE);
@@ -2464,7 +2464,7 @@ void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
         // Capture validation data on first iteration
         if (validation && iter == 0)
         {
-            validation->method = "FORGEAVX";
+            validation->method = "CODEGENAVX";
             validation->pv = mcPrice;
             validation->sensitivities = finalDerivatives;
         }
@@ -2477,7 +2477,7 @@ void runJITAVXBenchmarkCVA(const BenchmarkConfig& config, const LMMSetup& setup,
     phase3_compile_mean = computeMean(phase3_times);
 }
 
-#endif // QLAAD_HAS_FORGE
+#endif // QLAAD_HAS_CODEGEN
 
 // ============================================================================
 // XAD-Split Benchmark (CVA) - per-path tape recording
@@ -2678,17 +2678,17 @@ std::vector<TimingResult> runAADBenchmark(const BenchmarkConfig& config,
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLAAD_HAS_FORGE)
+#if defined(QLAAD_HAS_CODEGEN)
         if (!xadOnly)
         {
-            // Forge JIT
+            // Codegen JIT
             runJITBenchmark(config, setup, nrTrails, warmup, bench,
                             result.jit_mean, result.jit_std,
                             captureValidation ? jitValidation : nullptr);
             result.jit_enabled = true;
             std::cout << "JIT=" << result.jit_mean << "ms ";
 
-            // Forge JIT-AVX (batched execution)
+            // Codegen JIT-AVX (batched execution)
             runJITAVXBenchmark(config, setup, nrTrails, warmup, bench,
                                result.jit_avx_mean, result.jit_avx_std,
                                captureValidation ? jitAvxValidation : nullptr);
@@ -2774,10 +2774,10 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLAAD_HAS_FORGE)
+#if defined(QLAAD_HAS_CODEGEN)
         if (!xadOnly)
         {
-            // Forge JIT (dual-curve)
+            // Codegen JIT (dual-curve)
             double jit_p1 = 0, jit_p2 = 0, jit_p3 = 0;
             runJITBenchmarkDualCurve(config, setup, nrTrails, warmup, bench,
                                       result.jit_mean, result.jit_std,
@@ -2790,7 +2790,7 @@ std::vector<TimingResult> runAADBenchmarkDualCurve(const BenchmarkConfig& config
             result.jit_fixed_mean = jit_p1 + jit_p2 + jit_p3;
             std::cout << "JIT=" << result.jit_mean << "ms ";
 
-            // Forge JIT-AVX (dual-curve, batched execution)
+            // Codegen JIT-AVX (dual-curve, batched execution)
             double avx_p1 = 0, avx_p2 = 0, avx_p3 = 0;
             runJITAVXBenchmarkDualCurve(config, setup, nrTrails, warmup, bench,
                                          result.jit_avx_mean, result.jit_avx_std,
@@ -2975,10 +2975,10 @@ std::vector<TimingResult> runAADBenchmarkCVA(const BenchmarkConfig& config,
             std::cout << "XAD-Split=" << result.xad_split_mean << "ms ";
         }
 
-#if defined(QLAAD_HAS_FORGE)
+#if defined(QLAAD_HAS_CODEGEN)
         if (!xadOnly)
         {
-            // Forge JIT (CVA)
+            // Codegen JIT (CVA)
             double jit_p1 = 0, jit_p2 = 0, jit_p3 = 0;
             runJITBenchmarkCVA(config, setup, nrTrails, warmup, bench,
                                 result.jit_mean, result.jit_std,
@@ -2991,7 +2991,7 @@ std::vector<TimingResult> runAADBenchmarkCVA(const BenchmarkConfig& config,
             result.jit_fixed_mean = jit_p1 + jit_p2 + jit_p3;
             std::cout << "JIT=" << result.jit_mean << "ms ";
 
-            // Forge JIT-AVX (CVA, batched execution)
+            // Codegen JIT-AVX (CVA, batched execution)
             double avx_p1 = 0, avx_p2 = 0, avx_p3 = 0;
             runJITAVXBenchmarkCVA(config, setup, nrTrails, warmup, bench,
                                    result.jit_avx_mean, result.jit_avx_std,
@@ -3042,9 +3042,9 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     }
     std::cout << std::endl;
 
-#if defined(QLAAD_HAS_FORGE)
-    // Forge results (formerly JIT)
-    std::cout << "FORGE_" << configId << ":";
+#if defined(QLAAD_HAS_CODEGEN)
+    // Codegen results (formerly JIT)
+    std::cout << "CODEGEN_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
@@ -3055,25 +3055,25 @@ void outputResultsForParsing(const std::vector<TimingResult>& results,
     }
     std::cout << std::endl;
 
-    // Forge-AVX results (formerly JITAVX)
-    std::cout << "FORGEAVX_" << configId << ":";
+    // Codegen-AVX results (formerly JITAVX)
+    std::cout << "CODEGENAVX_" << configId << ":";
     for (size_t i = 0; i < results.size(); ++i)
     {
         const auto& r = results[i];
         if (i > 0) std::cout << ";";
         std::cout << r.pathCount << "=" << r.jit_avx_mean << "," << r.jit_avx_std
                   << "," << (r.jit_avx_enabled ? "1" : "0")
-                  << "," << r.jit_fixed_mean;  // Same fixed cost as Forge
+                  << "," << r.jit_fixed_mean;  // Same fixed cost as Codegen
     }
     std::cout << std::endl;
 
-    // Forge phase breakdown (one-time costs: phase1_curve, phase2_jacobian, phase3_compile)
-    // Output from first result that has Forge enabled (phases are same for all path counts)
+    // Codegen phase breakdown (one-time costs: phase1_curve, phase2_jacobian, phase3_compile)
+    // Output from first result that has Codegen enabled (phases are same for all path counts)
     for (const auto& r : results)
     {
         if (r.jit_enabled)
         {
-            std::cout << "FORGE_PHASES_" << configId << ":"
+            std::cout << "CODEGEN_PHASES_" << configId << ":"
                       << r.jit_phase1_curve_mean << ","
                       << r.jit_phase2_jacobian_mean << ","
                       << r.jit_phase3_compile_mean << std::endl;
@@ -3161,7 +3161,7 @@ int main(int argc, char* argv[])
     printHeader();
     printEnvironment();
 
-#if defined(QLAAD_HAS_FORGE)
+#if defined(QLAAD_HAS_CODEGEN)
     // Run diagnostic comparison if requested
     if (runDiagnose)
     {
