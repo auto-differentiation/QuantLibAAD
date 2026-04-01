@@ -1,5 +1,5 @@
 option(QLAAD_BUILD_TEST_SUITE "Build the QuantLibAAD test suite" OFF)
-option(QLAAD_ENABLE_FORGE_TESTS "Enable Forge JIT tests (requires Forge)" OFF)
+option(QLAAD_ENABLE_CODEGEN_TESTS "Enable Codegen JIT tests (requires XAD codegen)" OFF)
 
 set(QLAAD_TEST_SOURCES
     americanoption_xad.cpp
@@ -17,15 +17,15 @@ set(QLAAD_TEST_SOURCES
     quantlibtestsuite_xad.cpp
 )
 
-# Forge JIT tests - require Forge's native code backend
+# Codegen JIT tests - require XAD's native code backend
 # Tests QuantLib-specific JIT functionality (swaption pricing pipeline)
-set(QLAAD_FORGE_TESTS_ENABLED FALSE)
-if(QLAAD_ENABLE_FORGE_TESTS AND TARGET QLAAD::forge)
-    message(STATUS "QLAAD test-suite: Adding Forge JIT tests (native code backend)")
+set(QLAAD_CODEGEN_TESTS_ENABLED FALSE)
+if(QLAAD_ENABLE_CODEGEN_TESTS AND TARGET QLAAD::codegen)
+    message(STATUS "QLAAD test-suite: Adding Codegen JIT tests (native code backend)")
     list(APPEND QLAAD_TEST_SOURCES swaption_jit_pipeline_xad.cpp)
-    set(QLAAD_FORGE_TESTS_ENABLED TRUE)
-elseif(QLAAD_ENABLE_FORGE_TESTS)
-    message(WARNING "QLAAD test-suite: QLAAD_ENABLE_FORGE_TESTS=ON but QLAAD::forge not available")
+    set(QLAAD_CODEGEN_TESTS_ENABLED TRUE)
+elseif(QLAAD_ENABLE_CODEGEN_TESTS)
+    message(WARNING "QLAAD test-suite: QLAAD_ENABLE_CODEGEN_TESTS=ON but QLAAD::codegen not available")
 endif()
 
 set(QLAAD_TEST_HEADERS utilities_xad.hpp)
@@ -40,15 +40,13 @@ if(QL_BUILD_TEST_SUITE OR QLAAD_BUILD_TEST_SUITE)
         ql_library
         ${QL_THREAD_LIBRARIES})
 
-    # ONLY link to Forge if Forge tests are actually enabled
-    # This is important because linking Forge brings in AVX2-compiled code
-    # which can cause ODR violations if not properly isolated
-    if(QLAAD_FORGE_TESTS_ENABLED)
-        message(STATUS "QLAAD test-suite: Linking QLAAD::forge (Forge tests enabled)")
-        target_link_libraries(QuantLibAAD_test_suite PRIVATE QLAAD::forge)
-        target_compile_definitions(QuantLibAAD_test_suite PRIVATE QLAAD_HAS_FORGE=1)
+    # Link Codegen if Codegen tests are enabled
+    if(QLAAD_CODEGEN_TESTS_ENABLED)
+        message(STATUS "QLAAD test-suite: Linking QLAAD::codegen (Codegen tests enabled)")
+        target_link_libraries(QuantLibAAD_test_suite PRIVATE QLAAD::codegen)
+        target_compile_definitions(QuantLibAAD_test_suite PRIVATE QLAAD_HAS_CODEGEN=1)
     else()
-        message(STATUS "QLAAD test-suite: NOT linking Forge (Forge tests disabled)")
+        message(STATUS "QLAAD test-suite: NOT linking Codegen (Codegen tests disabled)")
     endif()
 
     if (QL_INSTALL_TEST_SUITE)
@@ -83,9 +81,9 @@ if(QLAAD_BUILD_BENCHMARK_FD)
     endif()
 endif()
 
-# AAD benchmark - XAD tape-based AAD and optionally Forge JIT
-# Built with XAD-enabled QuantLib, optionally links Forge for JIT benchmarks
-option(QLAAD_BUILD_BENCHMARK_AAD "Build AAD benchmark (XAD tape, optionally Forge JIT)" OFF)
+# AAD benchmark - XAD tape-based AAD and optionally Codegen JIT
+# Built with XAD-enabled QuantLib, optionally links Codegen for JIT benchmarks
+option(QLAAD_BUILD_BENCHMARK_AAD "Build AAD benchmark (XAD tape, optionally Codegen JIT)" OFF)
 if(QLAAD_BUILD_BENCHMARK_AAD)
     message(STATUS "QLAAD: Building AAD benchmark")
     add_executable(benchmark_aad
@@ -100,13 +98,13 @@ if(QLAAD_BUILD_BENCHMARK_AAD)
         ql_library
         ${QL_THREAD_LIBRARIES})
 
-    # Link Forge if available for JIT benchmarks
-    if(TARGET QLAAD::forge)
-        message(STATUS "QLAAD AAD benchmark: Linking QLAAD::forge (JIT benchmarks enabled)")
-        target_link_libraries(benchmark_aad PRIVATE QLAAD::forge)
-        target_compile_definitions(benchmark_aad PRIVATE QLAAD_HAS_FORGE=1)
+    # Link Codegen if available for JIT benchmarks
+    if(TARGET QLAAD::codegen)
+        message(STATUS "QLAAD AAD benchmark: Linking QLAAD::codegen (JIT benchmarks enabled)")
+        target_link_libraries(benchmark_aad PRIVATE QLAAD::codegen)
+        target_compile_definitions(benchmark_aad PRIVATE QLAAD_HAS_CODEGEN=1)
     else()
-        message(STATUS "QLAAD AAD benchmark: Building without Forge (XAD tape only)")
+        message(STATUS "QLAAD AAD benchmark: Building without Codegen (XAD tape only)")
     endif()
 
     if (QL_INSTALL_TEST_SUITE)

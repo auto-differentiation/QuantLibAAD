@@ -3,15 +3,13 @@
 #  QuantLibAAD CI Workflow
 #
 #  Tests QuantLibAAD with XAD automatic differentiation, and optionally
-#  with Forge JIT acceleration on Linux and Windows.
+#  
 #
 #  Jobs:
 #  - xad-linux: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-win: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-macos: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-linux-std-classes: XAD with QL_USE_STD_CLASSES
-#  - forge-linux: XAD + Forge JIT tests (C++17, Release/Debug)
-#  - forge-windows: XAD + Forge JIT tests (C++17, Release/Debug)
 #
 #  Copyright (C) 2010-2026 Xcelerit Computing Limited
 #
@@ -42,32 +40,12 @@ on:
         description: Branch or tag for XAD repository
         required: true
         default: main
-      forge_repo:
-        description: Forge repository in <owner>/<repo> format
-        required: true
-        default: da-roth/forge
-      forge_branch:
-        description: Branch or tag for Forge repository
-        required: true
-        default: main
-      xad_forge_repo:
-        description: xad-forge repository in <owner>/<repo> format
-        required: true
-        default: da-roth/xad-forge
-      xad_forge_branch:
-        description: Branch or tag for xad-forge repository
-        required: true
-        default: main
 
 env:
   ql_repo: ${{ github.event.inputs.ql_repo || 'lballabio/QuantLib' }}
   ql_branch: ${{ github.event.inputs.ql_branch || 'master' }}
   xad_repo: ${{ github.event.inputs.xad_repo || 'auto-differentiation/xad' }}
   xad_branch: ${{ github.event.inputs.xad_branch || 'main' }}
-  forge_repo: ${{ github.event.inputs.forge_repo || 'da-roth/forge' }}
-  forge_branch: ${{ github.event.inputs.forge_branch || 'main' }}
-  xad_forge_repo: ${{ github.event.inputs.xad_forge_repo || 'da-roth/xad-forge' }}
-  xad_forge_branch: ${{ github.event.inputs.xad_forge_branch || 'main' }}
 
 jobs:
   ##############################################################################
@@ -290,7 +268,7 @@ jobs:
 
   ##############################################################################
   # macOS - XAD
-  # Note: Forge not supported on macOS ARM yet
+  
   ##############################################################################
   xad-macos:
     strategy:
@@ -449,222 +427,3 @@ jobs:
           cd QuantLib/build
           ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
 
-  ##############################################################################
-  # Linux - XAD + Forge JIT
-  #
-  # Forge accelerates AAD tape computations via JIT compilation, so these jobs
-  # only make sense with AAD enabled (QLAAD_DISABLE_AAD=OFF).
-  # Tests C++17 and C++20 to match original XAD job coverage.
-  ##############################################################################
-  forge-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: ["Release", "Debug"]
-        cxx: ["17", "20"]
-    runs-on: ubuntu-latest
-    container: ghcr.io/lballabio/quantlib-devenv:rolling
-
-    steps:
-      - name: Checkout QuantLib
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ql_repo }}
-          ref: ${{ env.ql_branch }}
-          path: QuantLib
-
-      - name: Checkout XAD
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.xad_repo }}
-          ref: ${{ env.xad_branch }}
-          path: xad
-
-      - name: Checkout Forge
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.forge_repo }}
-          ref: ${{ env.forge_branch }}
-          path: forge
-
-      - name: Checkout xad-forge
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.xad_forge_repo }}
-          ref: ${{ env.xad_forge_branch }}
-          path: xad-forge
-
-      - name: Checkout QuantLibAAD
-        uses: actions/checkout@v4
-        with:
-          path: QuantLibAAD
-
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.12
-        with:
-          key: linux-forge-${{ matrix.build_type }}
-          max-size: 650M
-
-      - name: Setup
-        run: |
-          apt-get update && apt-get install -y ninja-build ccache
-
-      - name: Build Forge C API
-        run: |
-          cd forge
-          cmake -B build -S api/c \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_INSTALL_PREFIX=$(pwd)/../install
-          cmake --build build --config ${{ matrix.build_type }}
-          cmake --install build --config ${{ matrix.build_type }}
-
-      - name: Configure QuantLib with XAD + Forge
-        run: |
-          cd QuantLib
-          mkdir build
-          cd build
-          cmake -G Ninja -DBOOST_ROOT=/usr \
-            -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DXAD_WARNINGS_PARANOID=OFF \
-            -DXAD_ENABLE_JIT=ON \
-            -DCMAKE_PREFIX_PATH=$(pwd)/../../install \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../xad-forge;$(pwd)/../../QuantLibAAD" \
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
-            -DQL_NULL_AS_FUNCTIONS=ON \
-            -DQL_BUILD_TEST_SUITE=OFF \
-            -DQL_BUILD_EXAMPLES=OFF \
-            -DQL_BUILD_BENCHMARK=OFF \
-            -DQLAAD_DISABLE_AAD=OFF \
-            -DQLAAD_ENABLE_FORGE=ON \
-            -DQLAAD_USE_FORGE_CAPI=ON \
-            -DXAD_FORGE_USE_CAPI=ON \
-            -DQLAAD_BUILD_TEST_SUITE=ON \
-            -DQLAAD_ENABLE_FORGE_TESTS=ON \
-            ..
-
-      - name: Build
-        run: |
-          cd QuantLib/build
-          cmake --build .
-
-      - name: Test QuantLibAAD
-        run: |
-          cd QuantLib/build
-          ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
-
-  ##############################################################################
-  # Windows - XAD + Forge JIT
-  #
-  # Forge accelerates AAD tape computations via JIT compilation, so these jobs
-  # only make sense with AAD enabled (QLAAD_DISABLE_AAD=OFF).
-  # Tests C++17 and C++20 to match original XAD job coverage.
-  ##############################################################################
-  forge-windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: ["Release", "Debug"]
-        cxx: ["17", "20"]
-    runs-on: windows-2022
-
-    env:
-      VSVARSALL: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
-
-    steps:
-      - name: Checkout QuantLib
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.ql_repo }}
-          ref: ${{ env.ql_branch }}
-          path: QuantLib
-
-      - name: Checkout XAD
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.xad_repo }}
-          ref: ${{ env.xad_branch }}
-          path: xad
-
-      - name: Checkout Forge
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.forge_repo }}
-          ref: ${{ env.forge_branch }}
-          path: forge
-
-      - name: Checkout xad-forge
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.xad_forge_repo }}
-          ref: ${{ env.xad_forge_branch }}
-          path: xad-forge
-
-      - name: Checkout QuantLibAAD
-        uses: actions/checkout@v4
-        with:
-          path: QuantLibAAD
-
-      - name: Setup
-        run: choco install -y ninja
-
-      - name: Setup Boost
-        run: |
-          $Url = "https://downloads.sourceforge.net/project/boost/boost-binaries/1.86.0/boost_1_86_0-msvc-14.3-64.exe"
-          (New-Object System.Net.WebClient).DownloadFile($Url, "$RUNNER_TEMP\boost.exe")
-          Start-Process -Wait -FilePath "$RUNNER_TEMP\boost.exe" "/SILENT","/SP-","/SUPPRESSMSGBOXES","/DIR=C:\local\boost"
-          echo "BOOST_ROOT=C:\local\boost" >> $env:GITHUB_ENV
-
-      - name: Build Forge C API
-        shell: cmd
-        run: |
-          cd forge
-          call "%VSVARSALL%" amd64
-          cmake -B build -S api/c -G Ninja ^
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
-            -DFORGE_CAPI_BUILD_TESTS=OFF ^
-            -DFORGE_CAPI_USE_STATIC_RUNTIME=ON ^
-            -DCMAKE_INSTALL_PREFIX="%cd%\..\install"
-          cmake --build build --config ${{ matrix.build_type }}
-          cmake --install build --config ${{ matrix.build_type }}
-
-      - name: Configure QuantLib with XAD + Forge
-        shell: cmd
-        run: |
-          cd QuantLib
-          call "%VSVARSALL%" amd64
-          cmake -B build -G Ninja ^
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
-            -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} ^
-            -DXAD_WARNINGS_PARANOID=OFF ^
-            -DXAD_ENABLE_JIT=ON ^
-            -DXAD_STATIC_MSVC_RUNTIME=ON ^
-            -DCMAKE_PREFIX_PATH="%cd%\..\install" ^
-            -DQL_EXTERNAL_SUBDIRECTORIES="%cd%\..\xad;%cd%\..\xad-forge;%cd%\..\QuantLibAAD" ^
-            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
-            -DQL_NULL_AS_FUNCTIONS=ON ^
-            -DQL_BUILD_TEST_SUITE=OFF ^
-            -DQL_BUILD_EXAMPLES=OFF ^
-            -DQL_BUILD_BENCHMARK=OFF ^
-            -DQLAAD_DISABLE_AAD=OFF ^
-            -DQLAAD_ENABLE_FORGE=ON ^
-            -DQLAAD_USE_FORGE_CAPI=ON ^
-            -DXAD_FORGE_USE_CAPI=ON ^
-            -DQLAAD_BUILD_TEST_SUITE=ON ^
-            -DQLAAD_ENABLE_FORGE_TESTS=ON
-
-      - name: Build
-        shell: cmd
-        run: |
-          cd QuantLib\build
-          call "%VSVARSALL%" amd64
-          cmake --build . --config ${{ matrix.build_type }}
-
-      - name: Test QuantLibAAD
-        shell: cmd
-        run: |
-          cd QuantLib\build
-          set PATH=%cd%\..\..\install\bin;%PATH%
-          QuantLibAAD\test-suite\quantlib-aad-test-suite.exe --log_level=message

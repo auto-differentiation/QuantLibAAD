@@ -23,14 +23,11 @@
 ##############################################################################
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
-option(QLAAD_ENABLE_FORGE "Enable Forge JIT backend via xad-forge" OFF)
-option(QLAAD_USE_FORGE_CAPI "Use Forge C API instead of C++ API for binary compatibility" OFF)
+option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
 
 # Backward compatibility for old QLRISKS_* options
 foreach(_opt IN ITEMS
     DISABLE_AAD
-    ENABLE_FORGE
-    USE_FORGE_CAPI
 )
   if(DEFINED CACHE{QLRISKS_${_opt}})
     set(QLAAD_${_opt} ${QLRISKS_${_opt}} CACHE BOOL "" FORCE)
@@ -48,53 +45,42 @@ endif()
 add_subdirectory(Examples)
 
 ##############################################################################
-# QLAAD-Forge integration via xad-forge
+# QLAAD-Codegen integration (uses XAD's built-in codegen module)
 # NOTE: This must be defined BEFORE test-suite so tests can link to it
 ##############################################################################
 
-if(QLAAD_ENABLE_FORGE)
-    message(STATUS "QLAAD-Forge: Looking for xad-forge...")
+if(QLAAD_ENABLE_CODEGEN)
+    message(STATUS "QLAAD-Codegen: Looking for XAD codegen support...")
 
-    # Pass through the C API option to xad-forge
-    set(XAD_FORGE_USE_CAPI ${QLRISKS_USE_FORGE_CAPI} CACHE BOOL "" FORCE)
+    # Codegen is now built into XAD when XAD_ENABLE_CODEGEN=ON
+    if(TARGET xad_codegen)
+        message(STATUS "QLAAD-Codegen: Found xad_codegen target")
 
-    # Option 1: Check if xad-forge was added as subdirectory
-    if(TARGET xad-forge)
-        message(STATUS "QLAAD-Forge: Found xad-forge target (subdirectory mode)")
-        set(XAD_FORGE_FOUND TRUE)
-    endif()
+        # Create qlaad-codegen as an INTERFACE library
+        add_library(qlaad-codegen INTERFACE)
+        add_library(QLAAD::codegen ALIAS qlaad-codegen)
 
-    # Option 2: Try find_package for pre-built xad-forge
-    if(NOT XAD_FORGE_FOUND)
-        find_package(xad-forge CONFIG QUIET)
-        if(xad-forge_FOUND)
-            message(STATUS "QLAAD-Forge: Found xad-forge package (pre-built mode)")
-            set(XAD_FORGE_FOUND TRUE)
+        # xad already links xad_codegen, so just link xad
+        if(TARGET xad)
+            target_link_libraries(qlaad-codegen INTERFACE xad)
+        elseif(TARGET XAD::xad)
+            target_link_libraries(qlaad-codegen INTERFACE XAD::xad)
         endif()
-    endif()
 
-    if(XAD_FORGE_FOUND)
-        # Create qlaad-forge as an INTERFACE library wrapping xad-forge
-        add_library(qlaad-forge INTERFACE)
-        add_library(QLAAD::forge ALIAS qlaad-forge)
+        target_compile_definitions(qlaad-codegen INTERFACE QLAAD_HAS_CODEGEN=1)
 
-        target_link_libraries(qlaad-forge INTERFACE
-            XADForge::xad-forge
-        )
-
-        target_compile_definitions(qlaad-forge INTERFACE QLAAD_HAS_FORGE=1)
-
-        message(STATUS "QLAAD-Forge: Configured with xad-forge")
+        message(STATUS "QLAAD-Codegen: Configured successfully")
+    elseif(XAD_ENABLE_CODEGEN)
+        message(STATUS "QLAAD-Codegen: XAD_ENABLE_CODEGEN is ON but xad_codegen target not found")
     else()
-        message(STATUS "QLAAD-Forge: xad-forge not found - ForgeBackend will not be available")
-        message(STATUS "QLAAD-Forge: To enable, either:")
-        message(STATUS "  1. Add xad-forge as subdirectory")
-        message(STATUS "  2. Set CMAKE_PREFIX_PATH to xad-forge installation")
+        message(STATUS "QLAAD-Codegen: XAD was not built with XAD_ENABLE_CODEGEN=ON")
+        message(STATUS "  Codegen JIT backend requires a commercial license.")
+        message(STATUS "  See https://www.xcelerit.com/xad-enterprise-support")
     endif()
 endif()
 
 ##############################################################################
-# Test suite (after QLAAD::forge is defined)
+# Test suite (after QLAAD::codegen is defined)
 ##############################################################################
 
 # Add test-suite if:
