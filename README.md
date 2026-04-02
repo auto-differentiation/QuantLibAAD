@@ -9,8 +9,8 @@
     </a>
 </p>
 
-Part of the [XAD ecosystem](https://github.com/auto-differentiation) - the fastest automatic differentiation library for C++.
-If this is useful to you, please star the [core XAD repository](https://github.com/auto-differentiation/xad).
+> Part of the [XAD ecosystem](https://github.com/auto-differentiation) - the fastest automatic differentiation library for C++.
+> If this is useful to you, please star the [core XAD repository](https://github.com/auto-differentiation/xad).
 
 As a demonstrator of integration of the [XAD automatic differentiation tool](https://auto-differentiation.github.io) with real-world code, 
 the latest release of QuantLib can calculate risks (sensitivities) with the help of XAD. 
