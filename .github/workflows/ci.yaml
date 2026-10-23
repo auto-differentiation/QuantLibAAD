@@ -31,11 +31,11 @@ on:
       ql_repo:
         description: QuantLib repository in <owner>/<repo> format
         required: true
-        default: lballabio/QuantLib
+        default: auto-differentiation-dev/QuantLib
       ql_branch:
         description: Branch or tag for QuantLib repository
         required: true
-        default: master
+        default: qlaad-ci
       xad_repo:
         description: XAD repository in <owner>/<repo> format
         required: true
@@ -46,8 +46,9 @@ on:
         default: main
 
 env:
-  ql_repo: ${{ github.event.inputs.ql_repo || 'lballabio/QuantLib' }}
-  ql_branch: ${{ github.event.inputs.ql_branch || 'master' }}
+  # QuantLib master plus lballabio/QuantLib#2944 and #2935 (needed for XAD types) until they merge
+  ql_repo: ${{ github.event.inputs.ql_repo || 'auto-differentiation-dev/QuantLib' }}
+  ql_branch: ${{ github.event.inputs.ql_branch || 'qlaad-ci' }}
   xad_repo: ${{ github.event.inputs.xad_repo || 'auto-differentiation/xad' }}
   xad_branch: ${{ github.event.inputs.xad_branch || 'main' }}
 
