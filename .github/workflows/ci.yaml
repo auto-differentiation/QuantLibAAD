@@ -6,7 +6,7 @@
 #  
 #
 #  Jobs:
-#  - xad-linux: XAD tests (C++17, C++20, AAD ON/OFF)
+#  - xad-linux: XAD tests (C++17, C++20, AAD ON/OFF, direct mode)
 #  - xad-win: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-macos: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-linux-std-classes: XAD with QL_USE_STD_CLASSES
@@ -60,11 +60,17 @@ jobs:
   # The confusing double-negative is preserved for compatibility.
   ##############################################################################
   xad-linux:
+    name: xad-linux (${{ matrix.disable_aad }}, ${{ matrix.cxx }}${{ matrix.direct_mode == 'ON' && ', direct' || '' }})
     strategy:
       fail-fast: false
       matrix:
         disable_aad: ["ON", "OFF"]
         cxx: ["17", "20"]
+        direct_mode: ["OFF"]
+        include:
+          - disable_aad: "OFF"
+            cxx: "17"
+            direct_mode: "ON"
     runs-on: ubuntu-latest
     container: ghcr.io/lballabio/quantlib-devenv:rolling
 
@@ -88,7 +94,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.12
         with:
-          key: linux-xad-${{ matrix.cxx }}-${{ matrix.disable_aad }}
+          key: linux-xad-${{ matrix.cxx }}-${{ matrix.disable_aad }}${{ matrix.direct_mode == 'ON' && '-direct' || '' }}
           max-size: 650M
 
       - name: Setup
@@ -104,6 +110,7 @@ jobs:
           cmake -G Ninja -DBOOST_ROOT=/usr \
             -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} \
             -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} \
+            -DQLAAD_DIRECT_MODE=${{ matrix.direct_mode }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLibAAD" \
@@ -118,6 +125,8 @@ jobs:
           cmake --build .
 
       - name: Test QuantLib
+        # direct mode: the full QuantLib suite (~40 min) only in scheduled and triggered runs
+        if: ${{ matrix.direct_mode == 'OFF' || (github.event_name != 'push' && github.event_name != 'pull_request') }}
         run: |
           cd QuantLib/build
           ./test-suite/quantlib-test-suite --log_level=message
