@@ -11,6 +11,7 @@ set(QLAAD_TEST_SOURCES
     europeanoption_xad.cpp
     forwardrateagreement_xad.cpp
     hestonmodel_xad.cpp
+    null_xad.cpp
     swap_xad.cpp
 
     utilities_xad.cpp
