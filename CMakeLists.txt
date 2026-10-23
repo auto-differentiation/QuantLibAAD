@@ -23,6 +23,7 @@
 ##############################################################################
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
+option(QLAAD_DIRECT_MODE "Real = xad::ARealDirect<double> (XAD direct mode)" OFF)
 option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
 
 # Backward compatibility for old QLRISKS_* options

@@ -12,6 +12,7 @@ set(QLAAD_TEST_SOURCES
     forwardrateagreement_xad.cpp
     hestonmodel_xad.cpp
     null_xad.cpp
+    realtype_xad.cpp
     swap_xad.cpp
 
     utilities_xad.cpp
@@ -36,6 +37,9 @@ if(QL_BUILD_TEST_SUITE OR QLAAD_BUILD_TEST_SUITE)
     set_target_properties(QuantLibAAD_test_suite PROPERTIES OUTPUT_NAME "quantlib-aad-test-suite")
     if (NOT Boost_USE_STATIC_LIBS)
         target_compile_definitions(QuantLibAAD_test_suite PRIVATE BOOST_ALL_DYN_LINK)
+    endif()
+    if(QLAAD_DIRECT_MODE AND NOT QLAAD_DISABLE_AAD)
+        target_compile_definitions(QuantLibAAD_test_suite PRIVATE QLAAD_TEST_DIRECT_MODE)
     endif()
     target_link_libraries(QuantLibAAD_test_suite PRIVATE
         ql_library

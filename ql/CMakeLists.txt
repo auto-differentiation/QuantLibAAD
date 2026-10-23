@@ -24,6 +24,7 @@
 
 set(QLAAD_HEADERS
     qlaad.hpp
+    qlaad_direct.hpp
 )
 add_library(QuantLibAAD INTERFACE)
 add_library(QuantLib-Risks ALIAS QuantLibAAD)  # for compatibility
@@ -32,7 +33,9 @@ target_include_directories(QuantLibAAD INTERFACE
     $<INSTALL_INTERFACE:${QL_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(QuantLibAAD INTERFACE cxx_std_14)
-if(NOT QLAAD_DISABLE_AAD)
+if(NOT QLAAD_DISABLE_AAD AND QLAAD_DIRECT_MODE)
+    target_compile_definitions(QuantLibAAD INTERFACE QL_INCLUDE_FIRST=ql/qlaad_direct.hpp)
+elseif(NOT QLAAD_DISABLE_AAD)
     target_compile_definitions(QuantLibAAD INTERFACE QL_INCLUDE_FIRST=ql/qlaad.hpp)
 else()
     target_compile_definitions(QuantLibAAD INTERFACE QLAAD_DISABLE_AAD=1)
