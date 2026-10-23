@@ -18,6 +18,7 @@
 
 #include "toplevelfixture.hpp"
 #include "utilities_xad.hpp"
+#include <ql/math/functional.hpp>
 #include <ql/math/statistics/incrementalstatistics.hpp>
 #include <ql/types.hpp>
 #include <boost/math/special_functions/fpclassify.hpp>
@@ -52,6 +53,16 @@ BOOST_AUTO_TEST_CASE(boostRoundingAndClassification) {
     BOOST_CHECK_EQUAL((boost::math::fpclassify)(x), FP_NORMAL);
     BOOST_CHECK((boost::math::isfinite)(x));
     BOOST_CHECK(!(boost::math::isinf)(x));
+}
+
+BOOST_AUTO_TEST_CASE(squaredOfRealAndExpressions) {
+
+    BOOST_TEST_MESSAGE("Testing squared() of Real and of expressions...");
+
+    Real x = 3.0;
+    BOOST_CHECK(squared(x) == 9.0);
+    BOOST_CHECK(squared(2.0 * x) == 36.0);
+    BOOST_CHECK(squared(-x) == 9.0);
 }
 
 BOOST_AUTO_TEST_CASE(boostTypeTraits) {
