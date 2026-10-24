@@ -5,6 +5,7 @@ add_subdirectory(AdjointEuropeanEquityOption)
 add_subdirectory(AdjointHestonModel)
 add_subdirectory(AdjointMulticurveBootstrapping)
 add_subdirectory(AdjointSwap)
+add_subdirectory(AdjointTradeRisk)
 add_subdirectory(AdjointReplication)
 add_subdirectory(AdjointScaling)
 

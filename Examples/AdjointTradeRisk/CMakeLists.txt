@@ -1,0 +1,5 @@
+add_executable(AdjointTradeRisk AdjointTradeRiskXAD.cpp)
+target_link_libraries(AdjointTradeRisk ql_library)
+if(QL_INSTALL_EXAMPLES)
+    install(TARGETS AdjointTradeRisk RUNTIME DESTINATION  ${QL_INSTALL_EXAMPLESDIR})
+endif()
