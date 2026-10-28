@@ -24,6 +24,9 @@
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
 option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
+option(QLAAD_XAD_RECOMMENDED "XAD's recommended client settings: strong inlining (not with MSVC's cl.exe) and out-of-line recording" ON)
+option(QLAAD_TLS_INITIAL_EXEC "Initial-exec TLS model for XAD's active tape (Linux, GCC/Clang)" ON)
+option(QLAAD_FP_CONTRACT_OFF "No floating-point contraction (FMA), so that results don't depend on inlining or unity builds and AD values match double" ON)
 
 # Backward compatibility for old QLRISKS_* options
 foreach(_opt IN ITEMS
@@ -37,6 +40,8 @@ foreach(_opt IN ITEMS
     )
   endif()
 endforeach()
+
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/QLAADFastBuild.cmake)
 
 add_subdirectory(ql)
 if(MSVC)
