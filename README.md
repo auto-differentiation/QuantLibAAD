@@ -73,6 +73,25 @@ Using QuantLibAAD in production under commercial terms, with support, the XAD va
 
 For detailed build instructions with [XAD](https://auto-differentiation.github.io) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://auto-differentiation.github.io/quantlib-risks/cxx/).
 
+### Build options
+
+The defaults are the recommended settings; each can be switched off on the QuantLib command line.
+
+- `QLAAD_XAD_RECOMMENDED` (default `ON`): builds QuantLib and its users with XAD's `XAD_USE_STRONG_INLINE` and `XAD_OUTLINE_RECORDING`
+  (no strong inlining with MSVC's `cl.exe`, where it makes compiles about 2.4x slower).
+- `QLAAD_TLS_INITIAL_EXEC` (default `ON`, Linux with GCC/Clang): initial-exec TLS model for XAD's active tape.
+  Together with the above, AD run time on QuantLib's test suite drops from about 2.8x to 1.6x that of `double`.
+- `QLAAD_FP_CONTRACT_OFF` (default `ON`, GCC/Clang): `-ffp-contract=off`, so that results don't depend on inlining or unity builds and AD values match `double` exactly.
+- `QLAAD_PRECOMPILE_HEADERS` (default `ON`, `OFF` on Windows) and `QLAAD_UNITY_BATCH_SIZE` (default `8`, `0` for off):
+  precompiled headers and unity build for QuantLib's library and test suite (about 40% less compile CPU time).
+- `QLAAD_USE_CCACHE` (default `ON`): uses `ccache`, if installed, when no compiler launcher is set.
+- `QLAAD_CTEST_PER_SUITE` (default `ON`): registers each QuantLib test suite as its own CTest test, so `ctest -j <N> -R "^QuantLibTests/"` runs them in parallel.
+
+Opt-in, for the fastest AD code:
+
+- `QLAAD_LTO` (default `OFF`): link-time optimisation for QuantLib's and QuantLibAAD's targets (build only, not passed on to users).
+- `XAD_HUGE_PAGES` (XAD's option, default `OFF`, Linux): XAD's tape memory in 2 MiB huge pages, which speeds up large adjoint computations.
+
 ## Code Generation
 
 XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios — such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis — XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend.

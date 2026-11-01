@@ -24,6 +24,22 @@
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
 option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
+option(QLAAD_XAD_RECOMMENDED "XAD's recommended client settings: strong inlining (not with MSVC's cl.exe) and out-of-line recording" ON)
+option(QLAAD_TLS_INITIAL_EXEC "Initial-exec TLS model for XAD's active tape (Linux, GCC/Clang)" ON)
+option(QLAAD_FP_CONTRACT_OFF "No floating-point contraction (FMA), so that results don't depend on inlining or unity builds and AD values match double" ON)
+option(QLAAD_LTO "Link-time optimisation for QuantLib's and QuantLibAAD's targets (build only, not passed on to consumers)" OFF)
+
+# LTO for the targets QuantLib adds after this directory (ql/, Examples/, test-suite/) and ours
+if(QLAAD_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT qlaad_ipo OUTPUT qlaad_ipo_output LANGUAGES CXX)
+    if(qlaad_ipo)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON PARENT_SCOPE)
+    else()
+        message(WARNING "QLAAD_LTO: link-time optimisation not supported, ignored: ${qlaad_ipo_output}")
+    endif()
+endif()
 
 # Backward compatibility for old QLRISKS_* options
 foreach(_opt IN ITEMS
@@ -37,6 +53,8 @@ foreach(_opt IN ITEMS
     )
   endif()
 endforeach()
+
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/QLAADFastBuild.cmake)
 
 add_subdirectory(ql)
 if(MSVC)

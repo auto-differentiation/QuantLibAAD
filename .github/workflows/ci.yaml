@@ -121,7 +121,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(nproc) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -239,7 +239,7 @@ jobs:
         run: |
           cd QuantLib\build
           call "${{ env.vsvarsall }}" amd64
-          .\test-suite\quantlib-test-suite --log_level=message
+          ctest -j %NUMBER_OF_PROCESSORS% -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -350,7 +350,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(sysctl -n hw.ncpu) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -448,7 +448,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(nproc) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         run: |
