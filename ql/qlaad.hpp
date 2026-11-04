@@ -46,20 +46,18 @@
 // QuantLib specialisations to work with expressions
 namespace QuantLib {
 
-    // from ql/functional.hpp
-    template <class T>
-    T squared(T);
-
     // for binary expressions
     template <class Op, class Expr1, class Expr2>
-    typename xad::AReal<double> squared(const xad::BinaryExpr<double, Op, Expr1, Expr2>& x) {
-        return squared(xad::AReal<double>(x));
+    xad::AReal<double> squared(const xad::BinaryExpr<double, Op, Expr1, Expr2>& x) {
+        xad::AReal<double> y(x);
+        return y * y;
     }
 
     // for unary expressions
     template <class Op, class Expr>
-    typename xad::AReal<double> squared(const xad::UnaryExpr<double, Op, Expr>& x) {
-        return squared(xad::AReal<double>(x));
+    xad::AReal<double> squared(const xad::UnaryExpr<double, Op, Expr>& x) {
+        xad::AReal<double> y(x);
+        return y * y;
     }
 }
 
