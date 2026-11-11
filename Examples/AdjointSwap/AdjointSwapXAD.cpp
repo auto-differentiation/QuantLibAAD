@@ -256,7 +256,7 @@ double priceWithSensi(const std::vector<double>& marketQuotes,
             bootstrapCurve(Settings::instance().evaluationDate(), marketQuotesCpy, maxMaturity);
         auto portfolio = setupPortfolio(portfolioSize, maxMaturity, curveHandle);
         Real v1 = pricePortfolio(curveHandle, portfolio);
-        gradient.push_back(xad::value((v - v1) / eps));
+        gradient.push_back(xad::value((v1 - v) / eps));
         marketQuotesCpy[i] -= eps;
     }
 

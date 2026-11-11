@@ -113,6 +113,7 @@ jobs:
             ..
 
       - name: Compile
+        id: build
         run: |
           cd QuantLib/build
           cmake --build .
@@ -127,6 +128,12 @@ jobs:
         run: |
           cd QuantLib/build
           ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
+
+      - name: Test samples
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cd QuantLib/build
+          ctest -R "^Adjoint" --output-on-failure --no-tests=error
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -220,6 +227,7 @@ jobs:
           -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install
 
       - name: Build
+        id: build
         shell: cmd
         run: |
           cd QuantLib\build
@@ -240,6 +248,14 @@ jobs:
           cd QuantLib\build
           call "${{ env.vsvarsall }}" amd64
           .\QuantLibAAD\test-suite\quantlib-aad-test-suite --log_level=message
+
+      - name: Test samples
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: cmd
+        run: |
+          cd QuantLib\build
+          call "${{ env.vsvarsall }}" amd64
+          ctest -R "^Adjoint" --output-on-failure --no-tests=error
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -326,6 +342,7 @@ jobs:
             ..
 
       - name: Compile
+        id: build
         run: |
           cd QuantLib/build
           cmake --build .
@@ -340,6 +357,12 @@ jobs:
         run: |
           cd QuantLib/build
           ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
+
+      - name: Test samples
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cd QuantLib/build
+          ctest -R "^Adjoint" --output-on-failure --no-tests=error
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -417,6 +440,7 @@ jobs:
             ..
 
       - name: Compile
+        id: build
         run: |
           cd QuantLib/build
           cmake --build .
@@ -430,4 +454,10 @@ jobs:
         run: |
           cd QuantLib/build
           ./QuantLibAAD/test-suite/quantlib-aad-test-suite --log_level=message
+
+      - name: Test samples
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cd QuantLib/build
+          ctest -R "^Adjoint" --output-on-failure --no-tests=error
 
