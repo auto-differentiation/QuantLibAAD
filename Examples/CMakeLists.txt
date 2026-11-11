@@ -19,5 +19,6 @@ add_subdirectory(AdjointMulticurveBootstrapping)
 add_subdirectory(AdjointReplication)
 add_subdirectory(AdjointScaling)
 add_subdirectory(AdjointSwap)
+add_subdirectory(AdjointTradeRisk)
 
 
