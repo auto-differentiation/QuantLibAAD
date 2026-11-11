@@ -12,9 +12,10 @@
 > Part of the [XAD ecosystem](https://github.com/auto-differentiation) - the fastest automatic differentiation library for C++.
 > If this is useful to you, please star the [core XAD repository](https://github.com/auto-differentiation/xad).
 
-QuantLibAAD lets QuantLib compute all its risks (sensitivities) in one pass with [XAD](https://github.com/auto-differentiation/xad),
-using QuantLib's own code unchanged: 4× to 29× faster than bumping on the QuantLib samples below, and up to 270× faster
-on Monte Carlo with XAD's commercial code generation add-on. It shows XAD in production-quality use on a code base of
+QuantLibAAD builds QuantLib with [XAD](https://github.com/auto-differentiation/xad), so a pricing can compute all its
+risks (sensitivities) in one adjoint pass. QuantLib's library code is unchanged; your code registers the inputs, records
+the pricing and runs the adjoint, as the samples show. That is 4× to 29× faster than bumping on the QuantLib samples
+below, and up to 270× faster on Monte Carlo with XAD's commercial code generation add-on. It shows XAD in production-quality use on a code base of
 several hundred thousand lines.
 
 This repository contains integration headers, examples, and tests required
