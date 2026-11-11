@@ -56,3 +56,16 @@ function(check_relative_close label value reference tolerance floor)
     endif()
     check_close("${label} (within ${tolerance})" ${value} ${reference} ${allowed})
 endfunction()
+
+# fails unless a number in scientific notation, like 1.6e-05, is at most 10^-digits
+# times another one
+function(check_relative label number largest digits)
+    if(NOT largest MATCHES "^([0-9.]+)e([-+][0-9]+)$")
+        message(FATAL_ERROR "${label}: ${largest} is not in scientific notation")
+    endif()
+    math(EXPR exponent "${CMAKE_MATCH_2} - ${digits}")
+    set(bound "${CMAKE_MATCH_1}e${exponent}")
+    if(NOT number LESS_EQUAL bound)
+        message(FATAL_ERROR "${label}: ${number} is more than 1e-${digits} times ${largest}")
+    endif()
+endfunction()
