@@ -27,6 +27,50 @@ XAD is optimized for computing sensitivities efficiently in a single evaluation 
 
 **xad-codegen** is a high-performance native code generation backend that compiles recorded computation graphs to optimized x86-64 machine code, with support for AVX2 SIMD vectorization (4 paths per instruction). xad-codegen is available under a separate commercial license — [contact us](https://www.xcelerit.com/xad-enterprise-support) for more information.
 
+## Performance
+
+Risk with XAD costs little more than pricing alone, and far less than bumping.
+
+### Cost of AD types
+
+QuantLib built with XAD's active type, running without computing derivatives, against the same build with `double`:
+
+| | AD / double |
+|---|---|
+| QuantLib test suite (1714 cases) | 1.13× |
+| QuantLib benchmark | 1.21× |
+| QuantLib examples (20) | 1.10× |
+
+### Sensitivities: AD vs bump-and-revalue
+
+All sensitivities in one adjoint pass, against one finite-difference revaluation per input:
+
+| Sample | Inputs | XAD | Bumping |
+|---|---|---|---|
+| AdjointEuropeanEquityOption | 98 | **29×** faster · 0.24 s | 6.90 s |
+| AdjointMulticurveBootstrapping | 69 | **27×** faster · 1.85 s | 50.5 s |
+| AdjointSwap | 55 | **26×** faster · 0.45 s | 11.5 s |
+| AdjointReplication | 13 | **4.4×** faster · 1.33 s | 5.81 s |
+
+A full set of sensitivities costs 2–3.5 valuations.
+
+### Monte Carlo: tape, split mode and JIT
+
+`benchmark_aad`, 100,000 paths:
+
+| | Swaption (45 inputs) | CVA (90 inputs) |
+|---|---|---|
+| Bumping | 24.5 s | 48.9 s |
+| XAD tape | **6.8×** faster · 3.62 s | **13×** faster · 3.63 s |
+| XAD split mode | **11×** faster · 2.18 s | **22×** faster · 2.21 s |
+| JIT with xad-codegen ¹ | **158×** faster · 0.15 s | **270×** faster · 0.18 s |
+
+¹ xad-codegen is XAD's native code generation backend, available under a commercial license.
+
+### Setup
+
+AMD EPYC (Zen 5) server, 32 cores, Linux, GCC 15, XAD 2.2.0, Release build tuned for speed; median of 3 runs.
+
 ## Getting Started
 
 For detailed build instructions with [XAD](https://auto-differentiation.github.io) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://auto-differentiation.github.io/quantlib-risks/cxx/).
