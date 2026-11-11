@@ -1,0 +1,7 @@
+add_executable(AdjointScaling AdjointScalingXAD.cpp)
+target_link_libraries(AdjointScaling ql_library)
+if(QL_INSTALL_EXAMPLES)
+    install(TARGETS AdjointScaling RUNTIME DESTINATION  ${QL_INSTALL_EXAMPLESDIR})
+endif()
+
+add_sample_test(AdjointScaling)
