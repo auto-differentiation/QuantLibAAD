@@ -34,7 +34,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|C
     list(APPEND qlaad_xad_on XAD_HUGE_PAGES)
 endif()
 set(qlaad_xad_options XAD_LINEAR_SLOTS XAD_USE_STRONG_INLINE XAD_TLS_INITIAL_EXEC XAD_HUGE_PAGES)
-if(TARGET xad)
+option(QLAAD_ALLOW_XAD_FIRST "Allow xad before QuantLibAAD in QL_EXTERNAL_SUBDIRECTORIES, keeping XAD's own settings" OFF)
+if(TARGET xad AND NOT QLAAD_ALLOW_XAD_FIRST)
+    message(FATAL_ERROR "xad is configured before QuantLibAAD. "
+                        "Pass -DQL_EXTERNAL_SUBDIRECTORIES=\"<path>/QuantLibAAD;<path>/xad\" and reconfigure in a "
+                        "fresh build dir, or pass -DQLAAD_ALLOW_XAD_FIRST=ON to keep XAD's own settings.")
+elseif(TARGET xad)
     set(qlaad_xad_missing)
     foreach(opt IN LISTS qlaad_xad_on)
         if(NOT ${opt})

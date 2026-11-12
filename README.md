@@ -76,7 +76,7 @@ For detailed build instructions with [XAD](https://auto-differentiation.github.i
 ### Build options
 
 The defaults are tuned for speed: fast AD code, and fast builds of QuantLib and its tests.
-They need QuantLibAAD listed before XAD in `QL_EXTERNAL_SUBDIRECTORIES`, e.g. `-DQL_EXTERNAL_SUBDIRECTORIES="<path>/QuantLibAAD;<path>/xad"`; with XAD first, CMake warns which settings it misses.
+They need QuantLibAAD listed before XAD in `QL_EXTERNAL_SUBDIRECTORIES`, e.g. `-DQL_EXTERNAL_SUBDIRECTORIES="<path>/QuantLibAAD;<path>/xad"`; with XAD first, the configure stops with an error: fix the order and reconfigure in a fresh build dir, or pass `-DQLAAD_ALLOW_XAD_FIRST=ON` to keep XAD's own settings (CMake then warns which defaults it misses).
 
 Any of them can be switched off on the QuantLib command line:
 XAD's tape options with `-DXAD_<option>=OFF` (`XAD_USE_STRONG_INLINE`, `XAD_LINEAR_SLOTS`, `XAD_TLS_INITIAL_EXEC`, `XAD_HUGE_PAGES`),
