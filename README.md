@@ -75,22 +75,22 @@ For detailed build instructions with [XAD](https://auto-differentiation.github.i
 
 ### Build options
 
-The defaults are the recommended settings; each can be switched off on the QuantLib command line.
+The defaults are tuned for speed: fast AD code, and fast builds of QuantLib and its tests.
+They need QuantLibAAD listed before XAD in `QL_EXTERNAL_SUBDIRECTORIES`, e.g. `-DQL_EXTERNAL_SUBDIRECTORIES="<path>/QuantLibAAD;<path>/xad"`; with XAD first, CMake warns which settings it misses.
 
-- `QLAAD_XAD_RECOMMENDED` (default `ON`): builds QuantLib and its users with XAD's `XAD_USE_STRONG_INLINE` and `XAD_OUTLINE_RECORDING`
-  (no strong inlining with MSVC's `cl.exe`, where it makes compiles about 2.4x slower).
-- `QLAAD_TLS_INITIAL_EXEC` (default `ON`, Linux with GCC/Clang): initial-exec TLS model for XAD's active tape.
-  Together with the above, AD run time on QuantLib's test suite drops from about 2.8x to 1.6x that of `double`.
-- `QLAAD_FP_CONTRACT_OFF` (default `ON`, GCC/Clang): `-ffp-contract=off`, so that results don't depend on inlining or unity builds and AD values match `double` exactly.
-- `QLAAD_PRECOMPILE_HEADERS` (default `ON`, `OFF` on Windows) and `QLAAD_UNITY_BATCH_SIZE` (default `8`, `0` for off):
-  precompiled headers and unity build for QuantLib's library and test suite (about 40% less compile CPU time).
-- `QLAAD_USE_CCACHE` (default `ON`): uses `ccache`, if installed, when no compiler launcher is set.
-- `QLAAD_CTEST_PER_SUITE` (default `ON`): registers each QuantLib test suite as its own CTest test, so `ctest -j <N> -R "^QuantLibTests/"` runs them in parallel.
+Any of them can be switched off on the QuantLib command line:
+XAD's tape options with `-DXAD_<option>=OFF` (`XAD_USE_STRONG_INLINE`, `XAD_LINEAR_SLOTS`, `XAD_TLS_INITIAL_EXEC`, `XAD_HUGE_PAGES`),
+a shared QuantLib with `-DBUILD_SHARED_LIBS=ON`, and `-DQLAAD_<option>=OFF` for `QLAAD_LTO`, `QLAAD_FP_CONTRACT_OFF`, `QLAAD_FAST_BUILD`
+(or only `QLAAD_PRECOMPILE_HEADERS`, with `QLAAD_UNITY_BATCH_SIZE=0` for no unity build), `QLAAD_USE_CCACHE` and `QLAAD_CTEST_PER_SUITE`.
+Options that don't apply to a platform, compiler or Debug build (with single-config generators) are left off there; link-time optimisation is on by default with GCC, except on Windows.
 
-Opt-in, for the fastest AD code:
-
-- `QLAAD_LTO` (default `OFF`): link-time optimisation for QuantLib's and QuantLibAAD's targets (build only, not passed on to users).
-- `XAD_HUGE_PAGES` (XAD's option, default `OFF`, Linux): XAD's tape memory in 2 MiB huge pages, which speeds up large adjoint computations.
+- Set XAD's options with `-D` on the command line: other cache entries for them (from an old-order configure, ccmake, cmake-gui or `-C`) are replaced by the defaults (for `XAD_NO_THREADLOCAL`, XAD's own default, OFF), with a warning naming each entry that changes.
+- Linear slots take more tape memory, and stay off with `XAD_COPY_ELISION`, `XAD_TAPE_REUSE_SLOTS` or `XAD_TAPE_TRACK_LIVE_SLOTS`.
+- Bindings and other modules loaded with `dlopen` need `-DXAD_TLS_INITIAL_EXEC=OFF` (it is off by default for a shared QuantLib).
+- When QuantLib is built inside another project, that project's settings (`BUILD_SHARED_LIBS`, XAD's options) decide; with an installed XAD package, XAD's own settings apply.
+- A static QuantLib needs `-lxad` too for users that link through `pkg-config` or `quantlib-config` (or build with `-DBUILD_SHARED_LIBS=ON`); remove an older shared QuantLib from the install prefix.
+- One CTest test per suite needs CMake 3.28 or newer; older versions keep QuantLib's single test.
+- An installed LTO build links only with the same toolchain: installing for other toolchains needs `-DQLAAD_LTO_FAT_OBJECTS=ON` (GCC; it covers XAD's and QuantLib's libraries, not xad-codegen's), or `-DQLAAD_LTO=OFF`.
 
 ## Code Generation
 

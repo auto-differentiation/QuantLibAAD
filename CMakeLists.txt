@@ -24,22 +24,8 @@
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
 option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
-option(QLAAD_XAD_RECOMMENDED "XAD's recommended client settings: strong inlining (not with MSVC's cl.exe) and out-of-line recording" ON)
-option(QLAAD_TLS_INITIAL_EXEC "Initial-exec TLS model for XAD's active tape (Linux, GCC/Clang)" ON)
 option(QLAAD_FP_CONTRACT_OFF "No floating-point contraction (FMA), so that results don't depend on inlining or unity builds and AD values match double" ON)
-option(QLAAD_LTO "Link-time optimisation for QuantLib's and QuantLibAAD's targets (build only, not passed on to consumers)" OFF)
-
-# LTO for the targets QuantLib adds after this directory (ql/, Examples/, test-suite/) and ours
-if(QLAAD_LTO)
-    include(CheckIPOSupported)
-    check_ipo_supported(RESULT qlaad_ipo OUTPUT qlaad_ipo_output LANGUAGES CXX)
-    if(qlaad_ipo)
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON PARENT_SCOPE)
-    else()
-        message(WARNING "QLAAD_LTO: link-time optimisation not supported, ignored: ${qlaad_ipo_output}")
-    endif()
-endif()
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/QLAADDefaults.cmake)
 
 # Backward compatibility for old QLRISKS_* options
 foreach(_opt IN ITEMS
@@ -70,26 +56,21 @@ add_subdirectory(Examples)
 if(QLAAD_ENABLE_CODEGEN)
     message(STATUS "QLAAD-Codegen: Looking for XAD codegen support...")
 
-    # Codegen is now built into XAD when XAD_ENABLE_CODEGEN=ON
-    if(TARGET xad_codegen)
-        message(STATUS "QLAAD-Codegen: Found xad_codegen target")
+    # Codegen is built into XAD when XAD_ENABLE_CODEGEN=ON. Decided from the option, not from the
+    # xad_codegen target, which doesn't exist yet when QuantLibAAD comes before xad.
+    if(XAD_ENABLE_CODEGEN)
+        message(STATUS "QLAAD-Codegen: XAD_ENABLE_CODEGEN is ON")
 
         # Create qlaad-codegen as an INTERFACE library
         add_library(qlaad-codegen INTERFACE)
         add_library(QLAAD::codegen ALIAS qlaad-codegen)
 
         # xad already links xad_codegen, so just link xad
-        if(TARGET xad)
-            target_link_libraries(qlaad-codegen INTERFACE xad)
-        elseif(TARGET XAD::xad)
-            target_link_libraries(qlaad-codegen INTERFACE XAD::xad)
-        endif()
+        target_link_libraries(qlaad-codegen INTERFACE XAD::xad)
 
         target_compile_definitions(qlaad-codegen INTERFACE QLAAD_HAS_CODEGEN=1)
 
         message(STATUS "QLAAD-Codegen: Configured successfully")
-    elseif(XAD_ENABLE_CODEGEN)
-        message(STATUS "QLAAD-Codegen: XAD_ENABLE_CODEGEN is ON but xad_codegen target not found")
     else()
         message(STATUS "QLAAD-Codegen: XAD was not built with XAD_ENABLE_CODEGEN=ON")
         message(STATUS "  Codegen JIT backend requires a commercial license.")

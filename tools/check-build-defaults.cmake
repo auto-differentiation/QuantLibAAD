@@ -1,27 +1,35 @@
+cmake_minimum_required(VERSION 3.19)  # policies for cmake -P (IN_LIST, string(JSON))
+
 # Checks that a QuantLib build directory configured with QuantLibAAD's defaults gets the
 # expected build settings. Only configure-time output is inspected, no build is needed.
 #
-#   cmake -DBUILD_DIR=<QuantLib build dir> [-DUNITY_BATCH_SIZE=<n>] [-DCCACHE=OFF] [-DXAD_RECOMMENDED=OFF]
-#         [-DTLS_INITIAL_EXEC=OFF] [-DFP_CONTRACT_OFF=OFF] [-DLTO=ON] -P tools/check-build-defaults.cmake
+#   cmake -DBUILD_DIR=<QuantLib build dir> [-DUNITY_BATCH_SIZE=<n>] [-DCCACHE=OFF] [-DXAD_OPTIONS=<list>]
+#         [-DSHARED=ON] [-DFP_CONTRACT_OFF=OFF] [-DLTO=OFF] [-DFAT_LTO=ON] [-DPCH=OFF] [-DQL_PREFIX=<dir>/] [-DOLD_ORDER=ON] [-DCONFIGURE_LOG=<file> [-DEXPECT_WARNINGS=<list>]]
+#         -P tools/check-build-defaults.cmake
 #
 # UNITY_BATCH_SIZE (default 8) is the expected unity batch size; 0 expects no unity build.
 # CCACHE (default ON) expects ccache (>= 4.8 installed, no launcher set) as the compiler launcher;
 # OFF expects none (QLAAD_USE_CCACHE=OFF).
-# XAD_RECOMMENDED (default ON) expects XAD's recommended client-side definitions on all AD targets
-# and in QuantLibAAD's exported interface; OFF expects none (QLAAD_XAD_RECOMMENDED=OFF). Not checked
-# for double builds (QLAAD_DISABLE_AAD=ON).
-# TLS_INITIAL_EXEC (default ON) expects -ftls-model=initial-exec on the same AD targets and in
-# QuantLibAAD's exported INTERFACE_COMPILE_OPTIONS; OFF expects it nowhere
-# (QLAAD_TLS_INITIAL_EXEC=OFF). Linux only; not checked for double builds.
+# XAD_OPTIONS (default: the Linux GCC/Clang set XAD_USE_STRONG_INLINE, XAD_LINEAR_SLOTS,
+# XAD_TLS_INITIAL_EXEC and XAD_HUGE_PAGES) lists the tape options XAD's generated Config.hpp must
+# define; the others of these, and XAD_OUTLINE_RECORDING and XAD_NO_THREADLOCAL, it must not. No compile and no exported
+# interface gets them, or -ftls-model, client-side.
+# SHARED (default OFF) expects QuantLib as a shared library; OFF expects a static one.
 # FP_CONTRACT_OFF (default ON) expects -ffp-contract=off on all of QuantLib's and QuantLibAAD's
 # compiles and in QuantLibAAD's exported INTERFACE_COMPILE_OPTIONS, in AD and double builds; OFF
 # expects it nowhere (QLAAD_FP_CONTRACT_OFF=OFF).
-# LTO (default OFF) expects -flto on all of QuantLib's and QuantLibAAD's compiles and on the links
-# of the test suites and the benchmark, in AD and double builds, but not in QuantLibAAD's exported
-# INTERFACE_COMPILE_OPTIONS or INTERFACE_LINK_OPTIONS (QLAAD_LTO=ON); OFF expects it nowhere.
+# LTO (default ON) expects -flto on all of XAD's (not with OLD_ORDER), QuantLib's and QuantLibAAD's compiles and on the
+# links of the test suites and the benchmark, in AD and double builds, but not in QuantLibAAD's
+# exported INTERFACE_COMPILE_OPTIONS or INTERFACE_LINK_OPTIONS; OFF expects it nowhere (QLAAD_LTO=OFF).
+# QL_PREFIX: QuantLib's build dir below BUILD_DIR, with a trailing slash, when QuantLib is a subproject.
+# PCH (default ON) expects the files QLAADFastBuildPCH.cmake lists to skip the PCH outside unity batches, without it.
+# FAT_LTO=ON (QLAAD_LTO_FAT_OBJECTS=ON) expects -ffat-lto-objects on the compiles of the installed libraries (xad,
+# not with OLD_ORDER, and QuantLib), after any -fno-fat-lto-objects; OFF (default) expects it nowhere.
+# OLD_ORDER=ON: xad comes before QuantLibAAD in QL_EXTERNAL_SUBDIRECTORIES.
+# CONFIGURE_LOG is the configure output: QuantLibAAD warns exactly the EXPECT_WARNINGS (texts, default none).
 
 if(NOT BUILD_DIR)
-    message(FATAL_ERROR "usage: cmake -DBUILD_DIR=<QuantLib build dir> [-DUNITY_BATCH_SIZE=<n>] [-DCCACHE=OFF] [-DXAD_RECOMMENDED=OFF] [-DTLS_INITIAL_EXEC=OFF] [-DFP_CONTRACT_OFF=OFF] [-DLTO=ON] -P ${CMAKE_CURRENT_LIST_FILE}")
+    message(FATAL_ERROR "usage: cmake -DBUILD_DIR=<QuantLib build dir> [-DUNITY_BATCH_SIZE=<n>] [-DCCACHE=OFF] [-DXAD_OPTIONS=<list>] [-DSHARED=ON] [-DFP_CONTRACT_OFF=OFF] [-DLTO=OFF] [-DFAT_LTO=ON] [-DPCH=OFF] [-DQL_PREFIX=<dir>/] [-DOLD_ORDER=ON] [-DCONFIGURE_LOG=<file> [-DEXPECT_WARNINGS=<list>]] -P ${CMAKE_CURRENT_LIST_FILE}")
 endif()
 if(NOT DEFINED UNITY_BATCH_SIZE)
     set(UNITY_BATCH_SIZE 8)
@@ -29,22 +37,27 @@ endif()
 if(NOT DEFINED CCACHE)
     set(CCACHE ON)
 endif()
-if(NOT DEFINED XAD_RECOMMENDED)
-    set(XAD_RECOMMENDED ON)
+set(default_xad_options XAD_USE_STRONG_INLINE XAD_LINEAR_SLOTS XAD_TLS_INITIAL_EXEC XAD_HUGE_PAGES)
+if(NOT DEFINED XAD_OPTIONS)
+    set(XAD_OPTIONS ${default_xad_options})
 endif()
-if(NOT DEFINED TLS_INITIAL_EXEC)
-    set(TLS_INITIAL_EXEC ON)
+if(NOT DEFINED SHARED)
+    set(SHARED OFF)
+endif()
+if(NOT DEFINED OLD_ORDER)
+    set(OLD_ORDER OFF)
 endif()
 if(NOT DEFINED FP_CONTRACT_OFF)
     set(FP_CONTRACT_OFF ON)
 endif()
 if(NOT DEFINED LTO)
-    set(LTO OFF)
+    set(LTO ON)
 endif()
 
 # Unity build: ql_library and ql_test (the test-suite sources) compile batches of UNITY_BATCH_SIZE sources.
 foreach(target ql_library ql_test)
-    file(GLOB_RECURSE unity_sources "${BUILD_DIR}/*/CMakeFiles/${target}.dir/Unity/unity_*_cxx.cxx")
+    file(GLOB_RECURSE unity_sources "${BUILD_DIR}/unity_*_cxx.cxx")
+    list(FILTER unity_sources INCLUDE REGEX "/CMakeFiles/${target}\\.dir/Unity/")
     list(LENGTH unity_sources n)
     if(UNITY_BATCH_SIZE EQUAL 0)
         if(n GREATER 0)
@@ -68,11 +81,64 @@ foreach(target ql_library ql_test)
     endif()
 endforeach()
 
+# precompiled headers: the files listed to skip them (QLAADFastBuildPCH.cmake) are in no unity batch
+# and compile on their own without the PCH; every other compile of ql_library and ql_test uses it.
+# PCH=OFF: no compile uses one.
+if(NOT DEFINED PCH)
+    set(PCH ON)
+endif()
+file(READ ${BUILD_DIR}/build.ninja ninja_pch)
+string(REGEX MATCHALL "\nbuild [^\n:]*CMakeFiles/(ql_library|ql_test)\\.dir/[^\n]*\\.o: CXX_COMPILER[^\n]*(\n  [^\n]*)*"
+       pch_edges "${ninja_pch}")
+set(no_pch 0)
+foreach(e IN LISTS pch_edges)
+    if(NOT e MATCHES "\n  FLAGS = [^\n]*cmake_pch")
+        math(EXPR no_pch "${no_pch} + 1")
+    endif()
+endforeach()
+list(LENGTH pch_edges n_pch_edges)
+if(NOT PCH AND NOT no_pch EQUAL n_pch_edges)
+    message(FATAL_ERROR "expected no precompiled headers, but some ql_library/ql_test compiles use one")
+endif()
+if(PCH)
+    include(${CMAKE_CURRENT_LIST_DIR}/../cmake/QLAADFastBuildPCH.cmake)
+    file(GLOB_RECURSE unity_sources "${BUILD_DIR}/unity_*_cxx.cxx")
+    set(unity_text "")
+    foreach(u IN LISTS unity_sources)
+        file(READ ${u} t)
+        string(APPEND unity_text "${t}")
+    endforeach()
+    set(n_skip 0)
+    foreach(i RANGE 9)
+        if(NOT DEFINED qlaad_pch_${i})
+            continue()
+        endif()
+        list(GET qlaad_pch_${i} 0 target)
+        foreach(f IN LISTS qlaad_pch_${i}_skip)
+            string(FIND "${unity_text}" "/${f}\"" pos)
+            if(NOT pos EQUAL -1)
+                message(FATAL_ERROR "${f}: skips the PCH but is in a unity batch")
+            endif()
+            string(REGEX MATCH "^[^/]+/(.*)$" _ "${f}")   # the path below the target's source dir
+            string(REPLACE "." "\\." obj "${CMAKE_MATCH_1}")
+            if(NOT ninja_pch MATCHES "\nbuild [^\n:]*CMakeFiles/${target}\\.dir/${obj}\\.o: CXX_COMPILER[^\n]*(\n  [^\n]*)*")
+                message(FATAL_ERROR "${f}: no compile edge of its own")
+            elseif(CMAKE_MATCH_0 MATCHES "cmake_pch")
+                message(FATAL_ERROR "${f}: skips the PCH but compiles with it")
+            endif()
+            math(EXPR n_skip "${n_skip} + 1")
+        endforeach()
+    endforeach()
+    if(NOT no_pch EQUAL n_skip)
+        message(FATAL_ERROR "${no_pch} ql_library/ql_test compiles without the PCH, expected only the ${n_skip} listed to skip it")
+    endif()
+endif()
+
 # ccache: every compile of ql_library and ql_test runs through ccache, with the sloppiness settings
 # that let it hit with precompiled headers (Ninja: the LAUNCHER variable of each compile edge).
 file(READ ${BUILD_DIR}/build.ninja ninja)
 foreach(target ql_library ql_test)
-    string(REGEX MATCHALL "\nbuild [^\n]*CMakeFiles/${target}\.dir/[^\n]*: CXX_COMPILER[^\n]*(\n  [^\n]*)*"
+    string(REGEX MATCHALL "\nbuild [^\n]*CMakeFiles/${target}\\.dir/[^\n]*: CXX_COMPILER[^\n]*(\n  [^\n]*)*"
            edges "${ninja}")
     list(LENGTH edges n)
     if(n EQUAL 0)
@@ -83,8 +149,13 @@ foreach(target ql_library ql_test)
         if(e MATCHES "\n  LAUNCHER = ([^\n]*)")
             string(STRIP "${CMAKE_MATCH_1}" launcher)
         endif()
-        if(CCACHE AND NOT launcher MATCHES "^([^ ]*/)?ccache sloppiness=pch_defines,time_macros$")
-            message(FATAL_ERROR "${target}: expected ccache with sloppiness as launcher, found '${launcher}'")
+        if(PCH)
+            set(ccache_re "^([^ ]*/)?ccache sloppiness=pch_defines,time_macros$")   # needed with a PCH
+        else()
+            set(ccache_re "^([^ ]*/)?ccache$")
+        endif()
+        if(CCACHE AND NOT launcher MATCHES "${ccache_re}")
+            message(FATAL_ERROR "${target}: expected '${ccache_re}' as launcher, found '${launcher}'")
         elseif(NOT CCACHE AND launcher MATCHES "ccache")
             message(FATAL_ERROR "${target}: expected no ccache launcher, found '${launcher}'")
         endif()
@@ -107,7 +178,7 @@ set("re_QuantLib examples" "Examples/[^/ ]+/CMakeFiles/[^/ ]+\\.dir/")
 set("re_QuantLibAAD examples" "[^/ ]+/Examples/[^/ ]+/CMakeFiles/[^/ ]+\\.dir/")
 foreach(group IN LISTS groups)
     if(group STREQUAL "QuantLib examples")
-        set(prefix "\nbuild ")      # top-level Examples/ of the QuantLib build dir
+        set(prefix "\nbuild ${QL_PREFIX}")      # top-level Examples/ of the QuantLib build dir
     else()
         set(prefix "\nbuild [^\n:]*")
     endif()
@@ -118,14 +189,14 @@ foreach(group IN LISTS groups)
         message(FATAL_ERROR "${group}: no compile edges found in ${BUILD_DIR}/build.ninja")
     endif()
 endforeach()
-file(GLOB export_files "${BUILD_DIR}/*/CMakeFiles/Export/*/QuantLibTargets.cmake"
-                       "${BUILD_DIR}/CMakeFiles/Export/*/QuantLibTargets.cmake")
+file(GLOB_RECURSE export_files "${BUILD_DIR}/QuantLibTargets.cmake")
+list(FILTER export_files INCLUDE REGEX "/CMakeFiles/Export/")
 list(LENGTH export_files n)
 if(NOT n EQUAL 1)
     message(FATAL_ERROR "expected one QuantLibTargets.cmake export file in ${BUILD_DIR}, found ${n}: ${export_files}")
 endif()
 file(READ ${export_files} export)
-if(NOT export MATCHES "set_target_properties\\(QuantLib::QuantLibAAD PROPERTIES[^)]*")
+if(NOT export MATCHES "set_target_properties\\(QuantLib::QuantLibAAD PROPERTIES\n(  [^\n]*\n)*\\)")   # to its closing line
     message(FATAL_ERROR "QuantLib::QuantLibAAD not found in ${export_files}")
 endif()
 set(aad_props "${CMAKE_MATCH_0}")
@@ -134,84 +205,82 @@ if(aad_props MATCHES "INTERFACE_COMPILE_OPTIONS \"([^\"]*)\"")
     set(iface_opts "${CMAKE_MATCH_1}")
 endif()
 
-# XAD's recommended client-side configuration (XAD_USE_STRONG_INLINE, XAD_OUTLINE_RECORDING): in AD
-# builds, every compile of QuantLib's library, tests, benchmark and examples and of QuantLibAAD's
-# examples and test suite defines both (Ninja: the DEFINES variable of each compile edge), and the
-# exported QuantLibAAD target passes both on to installed consumers.
-set(xad_defines XAD_USE_STRONG_INLINE XAD_OUTLINE_RECORDING)
-if(disable_aad MATCHES "=(ON|TRUE|1|YES|Y)$")
-    set(xad_msg "XAD recommended options not checked (double build)")
-else()
-    foreach(group IN LISTS groups)
-        foreach(e IN LISTS "edges_${group}")
-            set(defines "")
-            if(e MATCHES "\n  DEFINES = ([^\n]*)")
-                set(defines " ${CMAKE_MATCH_1} ")
-            endif()
-            string(REGEX MATCH "^\nbuild ([^:]*):" _ "${e}")
-            set(obj "${CMAKE_MATCH_1}")
-            foreach(d IN LISTS xad_defines)
-                if(defines MATCHES " -D${d}(=[^ ]*)? ")
-                    set(has ON)
-                else()
-                    set(has OFF)
-                endif()
-                if(XAD_RECOMMENDED AND NOT has)
-                    message(FATAL_ERROR "${group}: ${obj} lacks -D${d} (DEFINES:${defines})")
-                elseif(NOT XAD_RECOMMENDED AND has)
-                    message(FATAL_ERROR "${group}: ${obj} has -D${d}, expected none")
-                endif()
-            endforeach()
-        endforeach()
-    endforeach()
-
-    set(iface_defs "")
-    if(aad_props MATCHES "INTERFACE_COMPILE_DEFINITIONS \"([^\"]*)\"")
-        set(iface_defs "${CMAKE_MATCH_1}")
+# XAD's tape options are set in XAD's generated Config.hpp, which QuantLibAAD's defaults reach by
+# coming before xad in QL_EXTERNAL_SUBDIRECTORIES; none is added client-side (Ninja: DEFINES and
+# FLAGS of each compile edge; QuantLibAAD's exported interface).
+file(GLOB_RECURSE xad_config "${BUILD_DIR}/Config.hpp")
+list(FILTER xad_config INCLUDE REGEX "/src/XAD/Config\\.hpp$")
+list(LENGTH xad_config n)
+if(NOT n EQUAL 1)
+    message(FATAL_ERROR "expected one generated XAD Config.hpp in ${BUILD_DIR}, found ${n}: ${xad_config}")
+endif()
+file(READ ${xad_config} xad_config_text)
+foreach(opt IN LISTS default_xad_options ITEMS XAD_OUTLINE_RECORDING XAD_NO_THREADLOCAL)
+    if(xad_config_text MATCHES "\n#define ${opt}\n")
+        set(has ON)
+    else()
+        set(has OFF)
     endif()
-    foreach(d IN LISTS xad_defines)
-        if(XAD_RECOMMENDED AND NOT d IN_LIST iface_defs)
-            message(FATAL_ERROR "exported QuantLibAAD: INTERFACE_COMPILE_DEFINITIONS lacks ${d} ('${iface_defs}')")
-        elseif(NOT XAD_RECOMMENDED AND d IN_LIST iface_defs)
-            message(FATAL_ERROR "exported QuantLibAAD: INTERFACE_COMPILE_DEFINITIONS has ${d}, expected none")
+    if(opt IN_LIST XAD_OPTIONS AND NOT has)
+        message(FATAL_ERROR "XAD's Config.hpp lacks #define ${opt}")
+    elseif(NOT opt IN_LIST XAD_OPTIONS AND has)
+        message(FATAL_ERROR "XAD's Config.hpp has #define ${opt}, expected none")
+    endif()
+endforeach()
+foreach(group IN LISTS groups)
+    foreach(e IN LISTS "edges_${group}")
+        string(REGEX MATCH "^\nbuild ([^:]*):" _ "${e}")
+        set(obj "${CMAKE_MATCH_1}")
+        if(e MATCHES "\n  DEFINES = [^\n]*-DXAD_(USE_STRONG_INLINE|OUTLINE_RECORDING|LINEAR_SLOTS|HUGE_PAGES|TLS_INITIAL_EXEC|NO_THREADLOCAL)"
+           OR e MATCHES "\n  FLAGS = [^\n]*-ftls-model")
+            message(FATAL_ERROR "${group}: ${obj} sets an XAD option client-side: ${CMAKE_MATCH_0}")
         endif()
     endforeach()
-    if(XAD_RECOMMENDED)
-        set(xad_msg "XAD recommended options on all AD targets and exported")
-    else()
-        set(xad_msg "no XAD recommended options")
-    endif()
+endforeach()
+if(aad_props MATCHES "XAD_(USE_STRONG_INLINE|OUTLINE_RECORDING|LINEAR_SLOTS|HUGE_PAGES|TLS_INITIAL_EXEC|NO_THREADLOCAL)|-ftls-model")
+    message(FATAL_ERROR "exported QuantLibAAD sets an XAD option client-side: ${aad_props}")
+endif()
+set(xad_msg "XAD with '${XAD_OPTIONS}', none client-side")
 
-    # initial-exec TLS model for XAD's active tape: same targets (Ninja: the FLAGS variable of each
-    # compile edge), passed on as an interface compile option of the exported QuantLibAAD target.
-    set(tls_flag "-ftls-model=initial-exec")
-    foreach(group IN LISTS groups)
-        foreach(e IN LISTS "edges_${group}")
-            set(flags "")
-            if(e MATCHES "\n  FLAGS = ([^\n]*)")
-                set(flags " ${CMAKE_MATCH_1} ")
-            endif()
-            string(REGEX MATCH "^\nbuild ([^:]*):" _ "${e}")
-            set(obj "${CMAKE_MATCH_1}")
-            string(FIND "${flags}" " ${tls_flag} " pos)
-            if(TLS_INITIAL_EXEC AND pos EQUAL -1)
-                message(FATAL_ERROR "${group}: ${obj} lacks ${tls_flag} (FLAGS:${flags})")
-            elseif(NOT TLS_INITIAL_EXEC AND NOT pos EQUAL -1)
-                message(FATAL_ERROR "${group}: ${obj} has ${tls_flag}, expected none")
+# QuantLibAAD's configure warnings (from its cmake/QLAAD*.cmake), each on one line with CMake's wrapping
+# undone: every expected one is there, and no other.
+if(DEFINED CONFIGURE_LOG)
+    file(READ ${CONFIGURE_LOG} log)
+    string(REPLACE "\n  " " " log "${log}")
+    string(REGEX MATCHALL "CMake Warning at [^\n]*/cmake/QLAAD[A-Za-z]*\\.cmake:[0-9]+ \\(message\\):[^\n]*" warnings "${log}")
+    foreach(w IN LISTS EXPECT_WARNINGS)
+        string(FIND "${warnings}" "${w}" pos)
+        if(pos EQUAL -1)
+            message(FATAL_ERROR "${CONFIGURE_LOG}: no warning '${w}'; QuantLibAAD's warnings: ${warnings}")
+        endif()
+    endforeach()
+    foreach(w IN LISTS warnings)
+        set(expected OFF)
+        foreach(e IN LISTS EXPECT_WARNINGS)
+            string(FIND "${w}" "${e}" pos)
+            if(NOT pos EQUAL -1)
+                set(expected ON)
             endif()
         endforeach()
+        if(NOT expected)
+            message(FATAL_ERROR "${CONFIGURE_LOG}: unexpected warning: ${w}")
+        endif()
     endforeach()
-    if(TLS_INITIAL_EXEC AND NOT tls_flag IN_LIST iface_opts)
-        message(FATAL_ERROR "exported QuantLibAAD: INTERFACE_COMPILE_OPTIONS lacks ${tls_flag} ('${iface_opts}')")
-    elseif(NOT TLS_INITIAL_EXEC AND tls_flag IN_LIST iface_opts)
-        message(FATAL_ERROR "exported QuantLibAAD: INTERFACE_COMPILE_OPTIONS has ${tls_flag}, expected none")
-    endif()
-    if(TLS_INITIAL_EXEC)
-        string(APPEND xad_msg ", initial-exec TLS on all AD targets and exported")
-    else()
-        string(APPEND xad_msg ", no initial-exec TLS")
-    endif()
+    list(LENGTH warnings n)
+    string(APPEND xad_msg ", ${n} expected warnings")
 endif()
+
+# QuantLib's library: static by default (Ninja: the linker rule of libQuantLib's link edge)
+if(SHARED)
+    set(ql_linker SHARED_LIBRARY)
+else()
+    set(ql_linker STATIC_LIBRARY)
+endif()
+if(NOT ninja MATCHES "\nbuild [^\n]*: CXX_${ql_linker}_LINKER__ql_library_")
+    message(FATAL_ERROR "ql_library: expected a CXX_${ql_linker}_LINKER__ql_library link edge in ${BUILD_DIR}/build.ninja")
+endif()
+string(TOLOWER "${ql_linker}" ql_msg)
+string(REPLACE "_" " " ql_msg "; QuantLib ${ql_msg}")
 
 # no floating-point contraction (FMA), so results don't depend on unity builds or inlining and AD
 # values match double: same targets in AD and double builds, and exported (Ninja: FLAGS).
@@ -246,7 +315,14 @@ endif()
 # and the benchmark (CXX_EXECUTABLE_LINKER__<target>_<config> edges: FLAGS and LINK_FLAGS) have
 # -flto[=<x>]; the exported QuantLibAAD target passes it on to no consumer.
 set(lto_re " -flto(=[^ ]*)? ")
+# (XAD's own compiles only when xad comes after QuantLibAAD, so not with OLD_ORDER)
 set(lto_edges "")
+if(NOT OLD_ORDER)
+    string(REGEX MATCHALL "\nbuild [^\n:]*CMakeFiles/xad\\.dir/[^\n]*: CXX_COMPILER[^\n]*(\n  [^\n]*)*" lto_edges "${ninja}")
+    if(lto_edges STREQUAL "")
+        message(FATAL_ERROR "xad: no compile edges found in ${BUILD_DIR}/build.ninja")
+    endif()
+endif()
 foreach(group IN LISTS groups)
     list(APPEND lto_edges ${edges_${group}})
 endforeach()
@@ -276,6 +352,27 @@ foreach(e IN LISTS lto_edges)
         message(FATAL_ERROR "${obj} has -flto, expected none")
     endif()
 endforeach()
+# the installed libraries carry machine code next to the LTO IR (GCC), so that they link without LTO too
+if(NOT DEFINED FAT_LTO)
+    set(FAT_LTO OFF)
+endif()
+set(fat_targets "ql_library|xad")
+if(OLD_ORDER)
+    set(fat_targets ql_library)   # no LTO for XAD then
+endif()
+string(REGEX MATCHALL "\nbuild [^\n:]*CMakeFiles/(${fat_targets})\\.dir/[^\n]*: CXX_COMPILER[^\n]*(\n  [^\n]*)*" lib_edges "${ninja}")
+foreach(e IN LISTS lib_edges)
+    string(REGEX MATCH "^\nbuild ([^:]*):" _ "${e}")
+    set(obj "${CMAKE_MATCH_1}")
+    if(FAT_LTO AND NOT e MATCHES "\n  FLAGS = [^\n]* -ffat-lto-objects( [^\n]*)?\n")
+        message(FATAL_ERROR "${obj} lacks -ffat-lto-objects")
+    elseif(FAT_LTO AND e MATCHES "\n  FLAGS = [^\n]* -ffat-lto-objects [^\n]*-fno-fat-lto-objects")
+        message(FATAL_ERROR "${obj}: -fno-fat-lto-objects after -ffat-lto-objects")
+    elseif(NOT FAT_LTO AND e MATCHES " -ffat-lto-objects")
+        message(FATAL_ERROR "${obj} has -ffat-lto-objects, expected none")
+    endif()
+endforeach()
+
 set(iface_links "")
 if(aad_props MATCHES "INTERFACE_LINK_OPTIONS \"([^\"]*)\"")
     set(iface_links "${CMAKE_MATCH_1}")
@@ -294,4 +391,4 @@ if(CCACHE)
 else()
     set(ccache_msg "no ccache")
 endif()
-message(STATUS "unity batch ${UNITY_BATCH_SIZE}, ${ccache_msg} for ql_library and ql_test; ${xad_msg}${fp_msg}${lto_msg}")
+message(STATUS "unity batch ${UNITY_BATCH_SIZE}, ${ccache_msg} for ql_library and ql_test; ${xad_msg}${ql_msg}${fp_msg}${lto_msg}")

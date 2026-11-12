@@ -5,7 +5,7 @@
       "name": "xad-base",
       "hidden": true,
       "cacheVariables": {
-        "QL_EXTERNAL_SUBDIRECTORIES": "${sourceDir}/../XAD;${sourceDir}/../quantlib-xad",
+        "QL_EXTERNAL_SUBDIRECTORIES": "${sourceDir}/../quantlib-xad;${sourceDir}/../XAD",
         "QL_EXTRA_LINK_LIBRARIES": "quantlib-xad",
         "QL_NULL_AS_FUNCTIONS": "ON",
         "XAD_STATIC_MSVC_RUNTIME": "ON",
