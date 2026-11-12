@@ -28,7 +28,8 @@ Risk with XAD costs little more than pricing alone, and far less than bumping.
 
 ### Cost of AD types
 
-QuantLib built with XAD's active type, running without computing derivatives, against the same build with `double`:
+About 10% overhead on QuantLib's examples and test suite: QuantLib built with XAD's active type, running without
+computing derivatives, against the same build with `double`:
 
 | | AD / double |
 |---|---|
