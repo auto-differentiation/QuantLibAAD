@@ -1,0 +1,205 @@
+##############################################################################
+#
+#  QuantLibAAD Overhead Benchmark
+#
+#  Times every QuantLib test-suite case and the QuantLib benchmark, built
+#  with Real = xad::AReal<double> (no tape recording) and with Real = double,
+#  on the same runner with QuantLibAAD's build defaults. The runs are
+#  interleaved and repeated; the job summary and the CSV artifact give
+#  AD/double time ratios, which are stable on noisy runners where absolute
+#  times are not. See tools/benchmark/README.md.
+#
+#  Copyright (C) 2010-2026 Xcelerit Computing Limited
+#
+#  SPDX-License-Identifier: AGPL-3.0-or-later
+#
+##############################################################################
+
+name: Overhead benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      xad_ref:
+        description: XAD branch, tag or commit (empty for v2.2.0)
+        required: false
+      ql_ref:
+        description: QuantLib branch, tag or commit (empty for cf74c9f65, which builds with AD)
+        required: false
+      repeats:
+        description: Runs of the test suite and the benchmark per build
+        required: false
+        type: number
+        default: 3
+  # A hook for other repositories, e.g. an XAD release: a repository_dispatch
+  # of type xad-release, with client_payload {"xad_ref": "<tag>"} and
+  # optionally "ql_ref".
+  repository_dispatch:
+    types: [xad-release]
+
+permissions:
+  contents: read
+
+# The defaults of the inputs above (repeats also in the Run step, for a dispatch). QuantLib master
+# can need upstream fixes before it builds with AD, so the default QuantLib is
+# a commit known to work.
+env:
+  xad_ref: ${{ inputs.xad_ref || github.event.client_payload.xad_ref || 'v2.2.0' }}
+  ql_ref: ${{ inputs.ql_ref || github.event.client_payload.ql_ref || 'cf74c9f657150750dfbf00ed6fd4c0768bc5ce36' }}
+
+jobs:
+  overhead:
+    name: overhead (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-gcc
+            os: ubuntu-latest
+            container: ghcr.io/lballabio/quantlib-devenv:rolling
+            cc: gcc
+            cxx: g++
+            python: python3
+          - name: linux-clang
+            os: ubuntu-latest
+            container: ghcr.io/lballabio/quantlib-devenv:rolling
+            cc: clang
+            cxx: clang++
+            python: python3
+          - name: windows-msvc
+            os: windows-2022
+            python: python
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 360
+
+    env:
+      vsvarsall: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+
+    steps:
+      - name: Check the dispatch payload
+        if: github.event_name == 'repository_dispatch' && !github.event.client_payload.xad_ref
+        shell: bash
+        run: |
+          echo "::error::a repository_dispatch needs client_payload.xad_ref"
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          repository: lballabio/QuantLib
+          ref: ${{ env.ql_ref }}
+          path: QuantLib
+
+      - uses: actions/checkout@v4
+        with:
+          repository: auto-differentiation/xad
+          ref: ${{ env.xad_ref }}
+          path: xad
+
+      - uses: actions/checkout@v4
+        with:
+          path: QuantLibAAD
+
+      # Small, to leave the repository's cache space to the CI jobs
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.12
+        with:
+          key: overhead-${{ matrix.name }}
+          variant: ${{ runner.os == 'Windows' && 'sccache' || 'ccache' }}
+          max-size: 400M
+
+      - name: Setup (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update && apt install -y ccache ninja-build python3
+          git config --global --add safe.directory '*'
+
+      - name: Setup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install -y ninja
+          $Url = "https://downloads.sourceforge.net/project/boost/boost-binaries/1.86.0/boost_1_86_0-msvc-14.3-64.exe"
+          (New-Object System.Net.WebClient).DownloadFile($Url, "$env:RUNNER_TEMP\boost.exe")
+          Start-Process -Wait -FilePath "$env:RUNNER_TEMP\boost.exe" "/SILENT","/SP-","/SUPPRESSMSGBOXES","/DIR=C:\local\boost"
+
+      # The CI build's options and QuantLibAAD's defaults (which need QuantLibAAD
+      # before xad in QL_EXTERNAL_SUBDIRECTORIES); only QLAAD_DISABLE_AAD differs.
+      # With these defaults, only GCC builds use link-time optimisation.
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 120
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          build() {
+            cmake -S QuantLib -B "build-$1" -G Ninja -DBOOST_ROOT=/usr \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DQLAAD_DISABLE_AAD="$2" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DQL_EXTERNAL_SUBDIRECTORIES="$GITHUB_WORKSPACE/QuantLibAAD;$GITHUB_WORKSPACE/xad" \
+              -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
+              -DQL_NULL_AS_FUNCTIONS=ON
+            cmake --build "build-$1" --target ql_test_suite ql_benchmark
+          }
+          build double ON
+          build aad OFF
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 120
+        env:
+          BOOST_ROOT: C:\local\boost
+        shell: cmd
+        run: |
+          call "%vsvarsall%" amd64
+          call :build double ON || exit /b 1
+          call :build aad OFF || exit /b 1
+          exit /b 0
+          :build
+          cmake -S QuantLib -B build-%1 -G Ninja ^
+            -DCMAKE_CXX_STANDARD=17 ^
+            -DQLAAD_DISABLE_AAD=%2 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
+            -DQL_EXTERNAL_SUBDIRECTORIES="%GITHUB_WORKSPACE%/QuantLibAAD;%GITHUB_WORKSPACE%/xad" ^
+            -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
+            -DQL_NULL_AS_FUNCTIONS=ON ^
+            -DXAD_STATIC_MSVC_RUNTIME=ON || exit /b 1
+          cmake --build build-%1 --target ql_test_suite ql_benchmark || exit /b 1
+          exit /b 0
+
+      # Well below the job's timeout, so that the summary and the upload still run
+      - name: Run
+        id: run
+        timeout-minutes: 180
+        shell: bash
+        env:
+          PYTHON: ${{ matrix.python }}
+          PLATFORM: ${{ matrix.name }}
+          REPEATS_INPUT: ${{ inputs.repeats }}
+        run: |
+          "$PYTHON" QuantLibAAD/tools/benchmark/run_benchmarks.py \
+            --build-double build-double --build-aad build-aad \
+            --repeats "${REPEATS_INPUT:-3}" --out results \
+            --meta "platform=$PLATFORM" \
+              "xad=$xad_ref ($(git -C xad rev-parse --short HEAD))" \
+              "quantlib=$ql_ref ($(git -C QuantLib rev-parse --short HEAD))" \
+              "quantlibaad=$(git -C QuantLibAAD rev-parse --short HEAD)"
+
+      - name: Summarise
+        if: ${{ !cancelled() && steps.run.outcome != 'skipped' }}
+        shell: bash
+        env:
+          PYTHON: ${{ matrix.python }}
+        run: |
+          "$PYTHON" QuantLibAAD/tools/benchmark/aggregate.py results --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.run.outcome != 'skipped' }}
+        with:
+          name: overhead-${{ matrix.name }}
+          path: results/
+          retention-days: 90

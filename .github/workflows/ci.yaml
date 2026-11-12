@@ -474,3 +474,20 @@ jobs:
           cd QuantLib/build
           ctest -R "^Adjoint" --output-on-failure --no-tests=error
 
+
+  ##############################################################################
+  # Unit tests of the overhead benchmark scripts (tools/benchmark)
+  ##############################################################################
+  benchmark-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Test the benchmark scripts
+        run: |
+          python -m pip install pytest
+          python -m pytest tools/benchmark/tests
