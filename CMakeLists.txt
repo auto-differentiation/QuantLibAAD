@@ -24,6 +24,8 @@
 
 option(QLAAD_DISABLE_AAD "Disable using XAD for QuantLib's Real, allowing to run samples with double" OFF)
 option(QLAAD_ENABLE_CODEGEN "Enable Codegen JIT backend (requires XAD built with XAD_ENABLE_CODEGEN)" OFF)
+option(QLAAD_FP_CONTRACT_OFF "No floating-point contraction (FMA), so that results don't depend on inlining or unity builds and AD values match double" ON)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/QLAADDefaults.cmake)
 
 # Backward compatibility for old QLRISKS_* options
 foreach(_opt IN ITEMS
@@ -37,6 +39,8 @@ foreach(_opt IN ITEMS
     )
   endif()
 endforeach()
+
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/QLAADFastBuild.cmake)
 
 add_subdirectory(ql)
 if(MSVC)
@@ -52,26 +56,21 @@ add_subdirectory(Examples)
 if(QLAAD_ENABLE_CODEGEN)
     message(STATUS "QLAAD-Codegen: Looking for XAD codegen support...")
 
-    # Codegen is now built into XAD when XAD_ENABLE_CODEGEN=ON
-    if(TARGET xad_codegen)
-        message(STATUS "QLAAD-Codegen: Found xad_codegen target")
+    # Codegen is built into XAD when XAD_ENABLE_CODEGEN=ON. Decided from the option, not from the
+    # xad_codegen target, which doesn't exist yet when QuantLibAAD comes before xad.
+    if(XAD_ENABLE_CODEGEN)
+        message(STATUS "QLAAD-Codegen: XAD_ENABLE_CODEGEN is ON")
 
         # Create qlaad-codegen as an INTERFACE library
         add_library(qlaad-codegen INTERFACE)
         add_library(QLAAD::codegen ALIAS qlaad-codegen)
 
         # xad already links xad_codegen, so just link xad
-        if(TARGET xad)
-            target_link_libraries(qlaad-codegen INTERFACE xad)
-        elseif(TARGET XAD::xad)
-            target_link_libraries(qlaad-codegen INTERFACE XAD::xad)
-        endif()
+        target_link_libraries(qlaad-codegen INTERFACE XAD::xad)
 
         target_compile_definitions(qlaad-codegen INTERFACE QLAAD_HAS_CODEGEN=1)
 
         message(STATUS "QLAAD-Codegen: Configured successfully")
-    elseif(XAD_ENABLE_CODEGEN)
-        message(STATUS "QLAAD-Codegen: XAD_ENABLE_CODEGEN is ON but xad_codegen target not found")
     else()
         message(STATUS "QLAAD-Codegen: XAD was not built with XAD_ENABLE_CODEGEN=ON")
         message(STATUS "  Codegen JIT backend requires a commercial license.")

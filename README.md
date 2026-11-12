@@ -73,6 +73,25 @@ Using QuantLibAAD in production under commercial terms, with support, the XAD va
 
 For detailed build instructions with [XAD](https://auto-differentiation.github.io) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://auto-differentiation.github.io/quantlib-risks/cxx/).
 
+### Build options
+
+The defaults are tuned for speed: fast AD code, and fast builds of QuantLib and its tests.
+They need QuantLibAAD listed before XAD in `QL_EXTERNAL_SUBDIRECTORIES`, e.g. `-DQL_EXTERNAL_SUBDIRECTORIES="<path>/QuantLibAAD;<path>/xad"`; with XAD first, the configure stops with an error: fix the order and reconfigure in a fresh build dir, or pass `-DQLAAD_ALLOW_XAD_FIRST=ON` to keep XAD's own settings (CMake then warns which defaults it misses).
+
+Any of them can be switched off on the QuantLib command line:
+XAD's tape options with `-DXAD_<option>=OFF` (`XAD_USE_STRONG_INLINE`, `XAD_LINEAR_SLOTS`, `XAD_TLS_INITIAL_EXEC`, `XAD_HUGE_PAGES`),
+a shared QuantLib with `-DBUILD_SHARED_LIBS=ON`, and `-DQLAAD_<option>=OFF` for `QLAAD_LTO`, `QLAAD_FP_CONTRACT_OFF`, `QLAAD_FAST_BUILD`
+(or only `QLAAD_PRECOMPILE_HEADERS`, with `QLAAD_UNITY_BATCH_SIZE=0` for no unity build), `QLAAD_USE_CCACHE` and `QLAAD_CTEST_PER_SUITE`.
+Options that don't apply to a platform, compiler or Debug build (with single-config generators) are left off there; link-time optimisation is on by default with GCC, except on Windows.
+
+- Set XAD's options with `-D` on the command line: other cache entries for them (from an old-order configure, ccmake, cmake-gui or `-C`) are replaced by the defaults (for `XAD_NO_THREADLOCAL`, XAD's own default, OFF), with a warning naming each entry that changes.
+- Linear slots take more tape memory, and stay off with `XAD_COPY_ELISION`, `XAD_TAPE_REUSE_SLOTS` or `XAD_TAPE_TRACK_LIVE_SLOTS`.
+- Bindings and other modules loaded with `dlopen` need `-DXAD_TLS_INITIAL_EXEC=OFF` (it is off by default for a shared QuantLib).
+- When QuantLib is built inside another project, that project's settings (`BUILD_SHARED_LIBS`, XAD's options) decide; with an installed XAD package, XAD's own settings apply.
+- A static QuantLib needs `-lxad` too for users that link through `pkg-config` or `quantlib-config` (or build with `-DBUILD_SHARED_LIBS=ON`); remove an older shared QuantLib from the install prefix.
+- One CTest test per suite needs CMake 3.28 or newer; older versions keep QuantLib's single test.
+- An installed LTO build links only with the same toolchain: installing for other toolchains needs `-DQLAAD_LTO_FAT_OBJECTS=ON` (GCC; it covers XAD's and QuantLib's libraries, not xad-codegen's), or `-DQLAAD_LTO=OFF`.
+
 ## Code Generation
 
 XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios — such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis — XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend.

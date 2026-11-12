@@ -73,7 +73,8 @@ cmake --build .
 **Adjusting Settings**
 
 The top section in the presets file sets the base configuration for using XAD.
-It has the settings for `QL_EXTERNAL_SUBDIRECTORIES`, etc.
+It has the settings for `QL_EXTERNAL_SUBDIRECTORIES` (QuantLibAAD before XAD, so that QuantLibAAD's defaults reach XAD), etc.
+The presets use XAD's thread-local tape, with initial-exec TLS on Linux: modules loaded with `dlopen` need `XAD_TLS_INITIAL_EXEC=OFF`.
 These can be adjusted to your needs, pointing to the relevant folders
 where you checked out QuantLibAAD and XAD.
 

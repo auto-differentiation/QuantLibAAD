@@ -106,11 +106,18 @@ jobs:
             -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLibAAD" \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../QuantLibAAD;$(pwd)/../../xad" \
             -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DCMAKE_INSTALL_PREFIX=$(pwd)/../../install \
-            ..
+            .. > configure.log 2>&1 || { cat configure.log; exit 1; }
+          cat configure.log
+
+      - name: Check build defaults
+        run: |
+          cd QuantLib/build
+          cmake -DBUILD_DIR=$(pwd) -DCONFIGURE_LOG=configure.log -P ../../QuantLibAAD/tools/check-build-defaults.cmake
+          cmake -DBUILD_DIR=$(pwd) -P ../../QuantLibAAD/tools/check-ctest-per-suite.cmake
 
       - name: Compile
         id: build
@@ -121,7 +128,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(nproc) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -134,6 +141,12 @@ jobs:
         run: |
           cd QuantLib/build
           ctest -R "^Adjoint" --output-on-failure --no-tests=error
+
+      - name: Check the per-suite tests against the test suite
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          cd QuantLib/build
+          cmake -DBUILD_DIR=$(pwd) -DTEST_BINARY=$(pwd)/test-suite/quantlib-test-suite -P ../../QuantLibAAD/tools/check-ctest-per-suite.cmake
 
       - name: Install
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -220,7 +233,7 @@ jobs:
           -DCMAKE_CXX_STANDARD=${{ matrix.cxx }} ^
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ^
           -DCMAKE_BUILD_TYPE=Release ^
-          -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLibAAD" ^
+          -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/QuantLibAAD;${{ github.workspace }}/xad" ^
           -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD ^
           -DQL_NULL_AS_FUNCTIONS=ON ^
           -DXAD_STATIC_MSVC_RUNTIME=ON ^
@@ -239,7 +252,7 @@ jobs:
         run: |
           cd QuantLib\build
           call "${{ env.vsvarsall }}" amd64
-          .\test-suite\quantlib-test-suite --log_level=message
+          ctest -j %NUMBER_OF_PROCESSORS% -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -335,7 +348,7 @@ jobs:
             -DQLAAD_DISABLE_AAD=${{ matrix.disable_aad }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/xad;${{ github.workspace }}/QuantLibAAD" \
+            -DQL_EXTERNAL_SUBDIRECTORIES="${{ github.workspace }}/QuantLibAAD;${{ github.workspace }}/xad" \
             -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install \
@@ -350,7 +363,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(sysctl -n hw.ncpu) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         if: ${{ matrix.disable_aad == 'OFF' }}
@@ -434,7 +447,7 @@ jobs:
             -DQL_USE_STD_CLASSES=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../xad;$(pwd)/../../QuantLibAAD" \
+            -DQL_EXTERNAL_SUBDIRECTORIES="$(pwd)/../../QuantLibAAD;$(pwd)/../../xad" \
             -DQL_EXTRA_LINK_LIBRARIES=QuantLibAAD \
             -DQL_NULL_AS_FUNCTIONS=ON \
             ..
@@ -448,7 +461,7 @@ jobs:
       - name: Test QuantLib
         run: |
           cd QuantLib/build
-          ./test-suite/quantlib-test-suite --log_level=message
+          ctest -j $(nproc) -R "^QuantLibTests/" --no-tests=error --output-on-failure
 
       - name: Test QuantLibAAD
         run: |
