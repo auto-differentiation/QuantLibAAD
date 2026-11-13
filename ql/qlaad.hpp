@@ -515,13 +515,15 @@ using xad::tan;
 
 #include <random>
 
+// Before VS 2022 17.12, std::generate_canonical computes constexpr values of the
+// result type, which Real cannot be. Route std::mt19937 to the non-constexpr
+// path instead. Later versions no longer do that and need no fix.
+#if _MSVC_STL_UPDATE < 202408L
 namespace std {
-
-    // this is needed to avoid std::random to revert to a binary / constexpr
-    // implementation for Real in the random generator
     template <>
     struct _Has_static_min_max<std::mt19937, void> : false_type {};
 }
+#endif
 
 #endif
 
