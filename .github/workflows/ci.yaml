@@ -7,7 +7,7 @@
 #
 #  Jobs:
 #  - xad-linux: XAD tests (C++17, C++20, AAD ON/OFF)
-#  - xad-win: XAD tests (C++17, C++20, AAD ON/OFF)
+#  - xad-win: XAD tests (C++17, C++20, AAD ON/OFF), plus VS 2026 (C++17, AAD)
 #  - xad-macos: XAD tests (C++17, C++20, AAD ON/OFF)
 #  - xad-linux-std-classes: XAD with QL_USE_STD_CLASSES
 #
@@ -184,10 +184,20 @@ jobs:
       matrix:
         disable_aad: ["ON", "OFF"]
         cxx: ["17", "20"]
-    runs-on: windows-2022
+        vs: ["2022"]
+        include:
+          - vs: "2022"
+            image: windows-2022
+            vsdir: "2022"
+          - vs: "2026"
+            disable_aad: "OFF"
+            cxx: "17"
+            image: windows-2025-vs2026
+            vsdir: "18"
+    runs-on: ${{ matrix.image }}
 
     env:
-      vsvarsall: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
+      vsvarsall: C:\Program Files\Microsoft Visual Studio\${{ matrix.vsdir }}\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
 
     steps:
       - uses: actions/checkout@v4
@@ -209,7 +219,7 @@ jobs:
       - name: sccache
         uses: hendrikmuhs/ccache-action@v1.2.12
         with:
-          key: windows-xad-${{ matrix.cxx }}-${{ matrix.disable_aad }}
+          key: windows-xad-${{ matrix.vs }}-${{ matrix.cxx }}-${{ matrix.disable_aad }}
           variant: sccache
           max-size: 650M
 
