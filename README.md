@@ -22,6 +22,9 @@ This repository contains integration headers, examples, and tests required
 for this integration.
 It is not usable stand-alone.
 
+> [!IMPORTANT]
+> **Using QuantLibAAD in your organization?** QuantLibAAD's integration code and [XAD](https://github.com/auto-differentiation/xad) are open source under the AGPL, to try them, for research and for open-source projects. The AGPL is not suitable for enterprise settings: for use in your organization you need a separate commercial license from Xcelerit, by annual XAD subscription. [Ask for a quote](https://www.xcelerit.com/quantlib/#start) (we reply within one business day) or [book a free, confidential license check](https://www.xcelerit.com/xad/licensing/#check).
+
 ## Performance
 
 Risk with XAD costs little more than pricing alone, and far less than bumping.
@@ -66,8 +69,6 @@ A full set of sensitivities costs 2–3.5 valuations.
 ### Setup
 
 AMD EPYC (Zen 5), one core, Linux, GCC 15, XAD 2.2.0, release build; median of 3 runs.
-
-Using QuantLibAAD in production under commercial terms, with support, the XAD validation pack or code generation: see [XAD subscriptions](https://www.xcelerit.com/xad/) or [contact us](https://www.xcelerit.com/xad/licensing/).
 
 ## Getting Started
 
@@ -126,6 +127,8 @@ and modified from QuantLib where the [QuantLib license](test-suite/LICENSE.TXT) 
 The [ql](ql/) folder contains adaptor modules for XAD,
 where the [GNU AGPL](ql/LICENSE.md) applies.
 This is clearly indicated by having separate license files in each folder.
+
+For use in your organization you need a separate commercial license: see the note at the top of this page, or [XAD licensing](https://www.xcelerit.com/xad/licensing/).
 
 ## Authors
 
