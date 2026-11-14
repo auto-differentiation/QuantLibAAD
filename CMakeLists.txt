@@ -74,7 +74,7 @@ if(QLAAD_ENABLE_CODEGEN)
     else()
         message(STATUS "QLAAD-Codegen: XAD was not built with XAD_ENABLE_CODEGEN=ON")
         message(STATUS "  Codegen JIT backend requires a commercial license.")
-        message(STATUS "  See https://www.xcelerit.com/xad-enterprise-support")
+        message(STATUS "  See https://www.xcelerit.com/xad/licensing/")
     endif()
 endif()
 

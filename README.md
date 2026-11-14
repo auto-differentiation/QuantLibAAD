@@ -67,11 +67,11 @@ A full set of sensitivities costs 2–3.5 valuations.
 
 AMD EPYC (Zen 5), one core, Linux, GCC 15, XAD 2.2.0, release build; median of 3 runs.
 
-Using QuantLibAAD in production under commercial terms, with support, the XAD validation pack or code generation: see [XAD subscriptions](https://www.xcelerit.com/xad/) or [contact us](https://www.xcelerit.com/xad-enterprise-support).
+Using QuantLibAAD in production under commercial terms, with support, the XAD validation pack or code generation: see [XAD subscriptions](https://www.xcelerit.com/xad/) or [contact us](https://www.xcelerit.com/xad/licensing/).
 
 ## Getting Started
 
-For detailed build instructions with [XAD](https://auto-differentiation.github.io) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://auto-differentiation.github.io/quantlib-risks/cxx/).
+For detailed build instructions with [XAD](https://www.xcelerit.com/xad/docs/) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://www.xcelerit.com/xad/docs/quantlib-aad/cxx/).
 
 ### Build options
 
@@ -94,7 +94,7 @@ Options that don't apply to a platform, compiler or Debug build (with single-con
 
 ## Code Generation
 
-XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios — such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis — XAD also supports recording computations into a [`JITGraph`](https://auto-differentiation.github.io/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend.
+XAD is optimized for computing sensitivities efficiently in a single evaluation pass using adjoint mode. For workflows that require repeated evaluation across many scenarios — such as Monte Carlo simulations, XVA calculations, regulatory stress testing, or scenario-based risk analysis — XAD also supports recording computations into a [`JITGraph`](https://www.xcelerit.com/xad/docs/ref/jit/) that can be compiled and re-evaluated efficiently using a JIT backend.
 
 **xad-codegen** compiles a recorded graph to native code and evaluates it vectorised across paths. It is a commercial add-on, available with XAD Enterprise subscriptions: see [XAD editions](https://www.xcelerit.com/xad/).
 
