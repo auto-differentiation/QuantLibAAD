@@ -130,6 +130,50 @@ Real priceWithSensi(const std::vector<Real>& hazardRates,
     return value;
 }
 
+#else
+
+// Sensitivities by bumping each input (forward difference), in the order of the XAD version
+Real priceWithSensi(const std::vector<Real>& hazardRates,
+                    std::vector<Date>& dates,
+                    const std::vector<Real>& riskFreeRate,
+                    Date issueDate,
+                    Date& maturity,
+                    Real recoveryRate,
+                    Real fixedRate,
+                    Calendar& calendar,
+                    DayCounter& dayCount,
+                    Real notional,
+                    std::vector<Real>& gradient) {
+    // error about h * T / 2 relative for rates over T <= 2 years, round-off about 1e-16 * v / h
+    const Real h = 1e-5;
+    Real value = priceCDS(hazardRates, dates, riskFreeRate, issueDate, maturity, recoveryRate,
+                          fixedRate, calendar, dayCount, notional);
+    // (value with the bumped inputs - value) / h
+    auto slope = [&](const std::vector<Real>& hazard, const std::vector<Real>& riskFree,
+                     Real recovery, Real fixed, Real nominal) {
+        return (priceCDS(hazard, dates, riskFree, issueDate, maturity, recovery, fixed, calendar,
+                         dayCount, nominal) -
+                value) /
+               h;
+    };
+
+    for (Size i = 0; i < riskFreeRate.size(); ++i) {
+        auto bumped = riskFreeRate;
+        bumped[i] += h;
+        gradient.push_back(slope(hazardRates, bumped, recoveryRate, fixedRate, notional));
+    }
+    for (Size i = 0; i < hazardRates.size(); ++i) {
+        auto bumped = hazardRates;
+        bumped[i] += h;
+        gradient.push_back(slope(bumped, riskFreeRate, recoveryRate, fixedRate, notional));
+    }
+    gradient.push_back(slope(hazardRates, riskFreeRate, recoveryRate + h, fixedRate, notional));
+    gradient.push_back(slope(hazardRates, riskFreeRate, recoveryRate, fixedRate + h, notional));
+    gradient.push_back(slope(hazardRates, riskFreeRate, recoveryRate, fixedRate, notional + h));
+
+    return value;
+}
+
 #endif
 
 void printResults(Real v, const std::vector<Real>& gradient) {
@@ -140,12 +184,12 @@ void printResults(Real v, const std::vector<Real>& gradient) {
         std::cout << gradient[i] << ", ";
     std::cout << "]\n";
     std::cout << "Hazard rate sensitivities = [";
-    for (int i = 9; i < 17; ++i)
+    for (int i = 9; i < 18; ++i)
         std::cout << gradient[i] << ", ";
     std::cout << "]\n";
-    std::cout << "Recovery rate sensitivity = " << gradient[17] << "\n";
-    std::cout << "Fixed rate sensitivity    = " << gradient[18] << "\n";
-    std::cout << "Notional sensitivity      = " << gradient[19] << "\n";
+    std::cout << "Recovery rate sensitivity = " << gradient[18] << "\n";
+    std::cout << "Fixed rate sensitivity    = " << gradient[19] << "\n";
+    std::cout << "Notional sensitivity      = " << gradient[20] << "\n";
 }
 
 int main() {
@@ -177,18 +221,15 @@ int main() {
             dates.push_back(today + tn[i]);
         }
 
-#ifdef QLAAD_DISABLE_AAD
-        std::cout << "Pricing a CDS without sensitivities...\n";
-        Real v = priceCDS(hazardRates, dates, riskFreeRate, issueDate, maturity, recoveryRate,
-                          fixedRate, calendar, dayCount, notional);
-        std::cout << "CDS value: " << v << "\n";
-#else
         std::vector<Real> gradient;
+#ifdef QLAAD_DISABLE_AAD
+        std::cout << "Pricing a CDS with bumped sensitivities...\n";
+#else
         std::cout << "Pricing a CDS with sensitivities...\n";
+#endif
         Real v = priceWithSensi(hazardRates, dates, riskFreeRate, issueDate, maturity,
                                 recoveryRate, fixedRate, calendar, dayCount, notional, gradient);
         printResults(v, gradient);
-#endif
 
         return 0;
     } catch (std::exception& e) {
