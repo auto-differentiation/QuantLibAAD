@@ -74,6 +74,8 @@ AMD EPYC (Zen 5), one core, Linux, GCC 15, XAD 2.2.0, release build; median of 3
 
 For detailed build instructions with [XAD](https://www.xcelerit.com/xad/docs/) and [QuantLib](https://www.quantlib.org), please refer to the [XAD documentation site](https://www.xcelerit.com/xad/docs/quantlib-aad/cxx/).
 
+QuantLib v1.44 needs the patches in [`patches/quantlib`](patches/quantlib/) to build with AD: apply them in the QuantLib checkout with `git apply <path>/QuantLibAAD/patches/quantlib/*.patch`.
+
 ### Build options
 
 The defaults are tuned for speed: fast AD code, and fast builds of QuantLib and its tests.

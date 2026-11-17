@@ -1,0 +1,537 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Auto Differentiation Dev Team
+ <107129969+auto-differentiation-dev@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 10:02:13 +0000
+Subject: [PATCH 3/3] Fix compilation of the test suite with
+ expression-template AD types (backport of #2934, test part)
+
+---
+ test-suite/americanoption.cpp                 |  4 +-
+ test-suite/barrieroption.cpp                  |  8 +-
+ test-suite/blackformula.cpp                   |  2 +-
+ test-suite/cashflows.cpp                      | 16 ++--
+ test-suite/cms.cpp                            |  4 +-
+ test-suite/daycounters.cpp                    |  2 +-
+ test-suite/defaultprobabilitycurves.cpp       | 16 ++--
+ test-suite/distributions.cpp                  | 74 +++++++++----------
+ test-suite/europeanoption.cpp                 |  2 +-
+ test-suite/fittedbonddiscountcurve.cpp        |  2 +-
+ test-suite/functions.cpp                      |  8 +-
+ .../overnightindexedfundingratehelper.cpp     |  5 +-
+ 12 files changed, 72 insertions(+), 71 deletions(-)
+
+diff --git a/test-suite/americanoption.cpp b/test-suite/americanoption.cpp
+index 16a69066d..6754b933a 100644
+--- a/test-suite/americanoption.cpp
++++ b/test-suite/americanoption.cpp
+@@ -2662,11 +2662,11 @@ BOOST_AUTO_TEST_CASE(testBaroneAdesiWhaleyNegativeRates) {
+                               ext::make_shared<EuropeanExercise>(exDate));
+     europeanPut.setPricingEngine(
+         ext::make_shared<AnalyticEuropeanEngine>(stochProcess));
+-    BOOST_CHECK_SMALL(option.NPV() - europeanPut.NPV(), 1.0e-6);
++    QL_CHECK_SMALL(option.NPV() - europeanPut.NPV(), 1.0e-6);
+ 
+     option.setPricingEngine(
+         ext::make_shared<JuQuadraticApproximationEngine>(stochProcess));
+-    BOOST_CHECK_SMALL(option.NPV() - europeanPut.NPV(), 1.0e-6);
++    QL_CHECK_SMALL(option.NPV() - europeanPut.NPV(), 1.0e-6);
+ 
+     // also verify with a call and positive dividends
+     auto callPayoff = ext::make_shared<PlainVanillaPayoff>(Option::Call, 40.0);
+diff --git a/test-suite/barrieroption.cpp b/test-suite/barrieroption.cpp
+index 4c198a338..655dfe6a1 100644
+--- a/test-suite/barrieroption.cpp
++++ b/test-suite/barrieroption.cpp
+@@ -1332,24 +1332,24 @@ Real perturbativeBarrierOptionValue(Natural order, Size npoint = 1000,
+ 
+ BOOST_AUTO_TEST_CASE(testPerturbativeOrder0) {
+     BOOST_TEST_MESSAGE("Testing perturbative barrier engine, order 0...");
+-    BOOST_CHECK_SMALL(perturbativeBarrierOptionValue(0) - 0.897365, 1.0e-6);
++    QL_CHECK_SMALL(perturbativeBarrierOptionValue(0) - 0.897365, 1.0e-6);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testPerturbativeOrder1) {
+     BOOST_TEST_MESSAGE("Testing perturbative barrier engine, order 1...");
+-    BOOST_CHECK_SMALL(perturbativeBarrierOptionValue(1) - 0.894374, 1.0e-6);
++    QL_CHECK_SMALL(perturbativeBarrierOptionValue(1) - 0.894374, 1.0e-6);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testPerturbativeOrder2Fast) {
+     BOOST_TEST_MESSAGE("Testing perturbative barrier engine, fast order 2...");
+-    BOOST_CHECK_SMALL(perturbativeBarrierOptionValue(2, 100, 10) - 0.8943769,
++    QL_CHECK_SMALL(perturbativeBarrierOptionValue(2, 100, 10) - 0.8943769,
+                       1.0e-6);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testPerturbativeOrder2FullResolution) {
+     // Takes about 10-20 seconds on Apple Silicon (2026).
+     BOOST_TEST_MESSAGE("Testing perturbative barrier engine, full-resolution order 2...");
+-    BOOST_CHECK_SMALL(perturbativeBarrierOptionValue(2) - 0.8943769, 1.0e-6);
++    QL_CHECK_SMALL(perturbativeBarrierOptionValue(2) - 0.8943769, 1.0e-6);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testVannaVolgaSimpleBarrierValues) {
+diff --git a/test-suite/blackformula.cpp b/test-suite/blackformula.cpp
+index 76d643282..3c3306812 100644
+--- a/test-suite/blackformula.cpp
++++ b/test-suite/blackformula.cpp
+@@ -502,7 +502,7 @@ BOOST_AUTO_TEST_CASE(testBachelierImpliedVolAtIntrinsic) {
+         for (Real offset : {0.01, 0.03, 0.07}) {
+             for (auto type : {Option::Call, Option::Put}) {
+                 const Real strike =
+-                    (type == Option::Call) ? forward - offset : forward + offset;
++                    (type == Option::Call) ? Real(forward - offset) : Real(forward + offset);
+                 const Real price = bachelierBlackFormula(
+                     type, strike, forward, vol * std::sqrt(tte));
+ 
+diff --git a/test-suite/cashflows.cpp b/test-suite/cashflows.cpp
+index 5837bb58a..1691fdc7c 100644
+--- a/test-suite/cashflows.cpp
++++ b/test-suite/cashflows.cpp
+@@ -674,7 +674,7 @@ BOOST_AUTO_TEST_CASE(testInterpolatedIborStubCoupon) {
+     const Real weight = Real(coupon->accrualEndDate() - shortMaturity) /
+                         Real(longMaturity - shortMaturity);
+     const Rate expected = shortRate + (longRate - shortRate) * weight;
+-    BOOST_CHECK_SMALL(coupon->indexFixing() - expected, 1.0e-14);
++    QL_CHECK_SMALL(coupon->indexFixing() - expected, 1.0e-14);
+ 
+     StubIndexSelection closest{
+         StubIndexSelection::ClosestIndex, {bkbm2m, bkbm3m}};
+@@ -684,7 +684,7 @@ BOOST_AUTO_TEST_CASE(testInterpolatedIborStubCoupon) {
+                          .withStubIndexSelection(closest);
+     auto closestCoupon = ext::dynamic_pointer_cast<StubIborCoupon>(closestLeg.front());
+     BOOST_REQUIRE(closestCoupon);
+-    BOOST_CHECK_SMALL(closestCoupon->indexFixing() - longRate, 1.0e-14);
++    QL_CHECK_SMALL(closestCoupon->indexFixing() - longRate, 1.0e-14);
+ 
+     // stub index conventions require indexed coupons...
+     BOOST_CHECK_THROW(Leg parLeg = IborLeg(schedule, bkbm3m)
+@@ -741,7 +741,7 @@ BOOST_AUTO_TEST_CASE(testIborStubInterpolationEndpointsAndRegularSchedule) {
+                       .withStubIndexSelection(convention);
+         auto coupon = ext::dynamic_pointer_cast<StubIborCoupon>(leg.front());
+         BOOST_REQUIRE(coupon);
+-        BOOST_CHECK_SMALL(coupon->indexFixing() - endpoint->fixing(coupon->fixingDate()),
++        QL_CHECK_SMALL(coupon->indexFixing() - endpoint->fixing(coupon->fixingDate()),
+                           1.0e-14);
+     }
+ 
+@@ -759,7 +759,7 @@ BOOST_AUTO_TEST_CASE(testIborStubInterpolationEndpointsAndRegularSchedule) {
+     auto defaultCoupon = ext::dynamic_pointer_cast<IborCoupon>(defaultLeg.front());
+     auto configuredCoupon = ext::dynamic_pointer_cast<IborCoupon>(configuredLeg.front());
+     BOOST_REQUIRE(defaultCoupon && configuredCoupon);
+-    BOOST_CHECK_SMALL(defaultCoupon->rate() - configuredCoupon->rate(), 1.0e-14);
++    QL_CHECK_SMALL(defaultCoupon->rate() - configuredCoupon->rate(), 1.0e-14);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testFinalAndLongIborStubCoupons) {
+@@ -800,7 +800,7 @@ BOOST_AUTO_TEST_CASE(testFinalAndLongIborStubCoupons) {
+         bkbm1m->fixing(finalCoupon->fixingDate()) +
+         (bkbm3m->fixing(finalCoupon->fixingDate()) -
+          bkbm1m->fixing(finalCoupon->fixingDate())) * finalWeight;
+-    BOOST_CHECK_SMALL(finalCoupon->indexFixing() - expectedFinal, 1.0e-14);
++    QL_CHECK_SMALL(finalCoupon->indexFixing() - expectedFinal, 1.0e-14);
+ 
+     const Date longStart(29, May, 2026);
+     const Date longEnd(30, October, 2026);
+@@ -823,7 +823,7 @@ BOOST_AUTO_TEST_CASE(testFinalAndLongIborStubCoupons) {
+         bkbm3m->fixing(longCoupon->fixingDate()) +
+         (bkbm6m->fixing(longCoupon->fixingDate()) -
+          bkbm3m->fixing(longCoupon->fixingDate())) * longWeight;
+-    BOOST_CHECK_SMALL(longCoupon->indexFixing() - expectedLong, 1.0e-14);
++    QL_CHECK_SMALL(longCoupon->indexFixing() - expectedLong, 1.0e-14);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testIborStubCouponHistoricalFixingsAndRelinking) {
+@@ -865,7 +865,7 @@ BOOST_AUTO_TEST_CASE(testIborStubCouponHistoricalFixingsAndRelinking) {
+     const Date longMaturity = bkbm3m->maturityDate(start);
+     const Real weight = Real(end - shortMaturity) / Real(longMaturity - shortMaturity);
+     const Rate expected = 0.05 + (0.08 - 0.05) * weight;
+-    BOOST_CHECK_SMALL(coupon->indexFixing() - expected, 1.0e-14);
++    QL_CHECK_SMALL(coupon->indexFixing() - expected, 1.0e-14);
+ 
+     bkbm2m->clearFixings();
+     bkbm3m->clearFixings();
+@@ -911,7 +911,7 @@ BOOST_AUTO_TEST_CASE(testIborStubCouponHasFixedUsesSelectedIndices) {
+     const Date shortMaturity = bkbm2m->maturityDate(start);
+     const Date longMaturity = bkbm3m->maturityDate(start);
+     const Real weight = Real(end - shortMaturity) / Real(longMaturity - shortMaturity);
+-    BOOST_CHECK_SMALL(coupon->indexFixing() - (0.05 + (0.08 - 0.05) * weight), 1.0e-14);
++    QL_CHECK_SMALL(coupon->indexFixing() - (0.05 + (0.08 - 0.05) * weight), 1.0e-14);
+ 
+     bkbm2m->clearFixings();
+     bkbm3m->clearFixings();
+diff --git a/test-suite/cms.cpp b/test-suite/cms.cpp
+index 669393f1c..fdd28dc76 100644
+--- a/test-suite/cms.cpp
++++ b/test-suite/cms.cpp
+@@ -500,12 +500,12 @@ BOOST_AUTO_TEST_CASE(testCmsMarketCalibration) {
+         ext::make_shared<LevenbergMarquardt>(1e-8, 1e-8, 1e-8);
+     ext::shared_ptr<OptimizationMethod> simplex = ext::make_shared<Simplex>(0.1);
+ 
+-    BOOST_CHECK_CLOSE(CmsMarketCalibration::betaTransformDirect(
++    QL_CHECK_CLOSE(CmsMarketCalibration::betaTransformDirect(
+                           CmsMarketCalibration::betaTransformInverse(0.5)),
+                       0.5, 1e-12);
+     BOOST_CHECK_EQUAL(CmsMarketCalibration::betaTransformDirect(20.0), 0.000001);
+     BOOST_CHECK_EQUAL(CmsMarketCalibration::betaTransformDirect(-20.0), 0.000001);
+-    BOOST_CHECK_CLOSE(CmsMarketCalibration::reversionTransformDirect(
++    QL_CHECK_CLOSE(CmsMarketCalibration::reversionTransformDirect(
+                           CmsMarketCalibration::reversionTransformInverse(0.01)),
+                       0.01, 1e-12);
+ 
+diff --git a/test-suite/daycounters.cpp b/test-suite/daycounters.cpp
+index 4145ef2c3..cdda7a57f 100644
+--- a/test-suite/daycounters.cpp
++++ b/test-suite/daycounters.cpp
+@@ -1418,7 +1418,7 @@ BOOST_AUTO_TEST_CASE(testYearFractionToDateForLinearDayCounter) {
+             if (dc.name() == Thirty365().name() || dc.name() == Actual366(true).name()) {
+                 BOOST_CHECK_EQUAL(d1.fractionOfDay(), calculated.fractionOfDay());
+                 const Time db = std::abs(dc.yearFraction(d2, calculated));
+-                BOOST_CHECK_SMALL(db, 10*QL_EPSILON);
++                QL_CHECK_SMALL(db, 10*QL_EPSILON);
+             }
+             else {
+                 const boost::posix_time::time_duration td
+diff --git a/test-suite/defaultprobabilitycurves.cpp b/test-suite/defaultprobabilitycurves.cpp
+index 147d0af8e..8688f9274 100644
+--- a/test-suite/defaultprobabilitycurves.cpp
++++ b/test-suite/defaultprobabilitycurves.cpp
+@@ -557,28 +557,28 @@ BOOST_AUTO_TEST_CASE(testJumps) {
+     // a jump whose date is already in the past must be ignored
+     {
+         auto [y, c] = ratio({q}, {today - 30}, 1.0);
+-        BOOST_CHECK_CLOSE(y, 1.0, tolerance);
+-        BOOST_CHECK_CLOSE(c, y, tolerance);
++        QL_CHECK_CLOSE(y, 1.0, tolerance);
++        QL_CHECK_CLOSE(c, y, tolerance);
+     }
+     // a jump on the reference date must be ignored
+     {
+         auto [y, c] = ratio({q}, {today}, 1.0);
+-        BOOST_CHECK_CLOSE(y, 1.0, tolerance);
+-        BOOST_CHECK_CLOSE(c, y, tolerance);
++        QL_CHECK_CLOSE(y, 1.0, tolerance);
++        QL_CHECK_CLOSE(c, y, tolerance);
+     }
+     // unsorted jump dates: the jump before t applies, the one after does not
+     {
+         Handle<Quote> a(ext::make_shared<SimpleQuote>(0.90));
+         Handle<Quote> b(ext::make_shared<SimpleQuote>(0.95));
+         auto [y, c] = ratio({a, b}, {today + 5 * 365, today + 365}, 2.0);
+-        BOOST_CHECK_CLOSE(y, 0.95, tolerance);
+-        BOOST_CHECK_CLOSE(c, y, tolerance);
++        QL_CHECK_CLOSE(y, 0.95, tolerance);
++        QL_CHECK_CLOSE(c, y, tolerance);
+     }
+     // a jump inside the interval still applies
+     {
+         auto [y, c] = ratio({q}, {today + 180}, 1.0);
+-        BOOST_CHECK_CLOSE(y, 0.99, tolerance);
+-        BOOST_CHECK_CLOSE(c, y, tolerance);
++        QL_CHECK_CLOSE(y, 0.99, tolerance);
++        QL_CHECK_CLOSE(c, y, tolerance);
+     }
+ }
+ 
+diff --git a/test-suite/distributions.cpp b/test-suite/distributions.cpp
+index 2561bf7e4..7d6686f6a 100644
+--- a/test-suite/distributions.cpp
++++ b/test-suite/distributions.cpp
+@@ -326,11 +326,11 @@ BOOST_AUTO_TEST_CASE(testInverseCumulativeNormal) {
+     BOOST_CHECK(std::isfinite(invCum(1.0 - QL_EPSILON)));
+     BOOST_CHECK(invCum(0.0) < 0.0);
+     BOOST_CHECK(invCum(1.0) > 0.0);
+-    BOOST_CHECK_CLOSE(invCum(0.02425), -1.972961049,
++    QL_CHECK_CLOSE(invCum(0.02425), -1.972961049,
+                       1.0e-6);
+-    BOOST_CHECK_CLOSE(invCum(0.97575), 1.972961049,
++    QL_CHECK_CLOSE(invCum(0.97575), 1.972961049,
+                       1.0e-6);
+-    BOOST_CHECK_CLOSE(invCum(0.1), -invCum(0.9), 1.0e-12);
++    QL_CHECK_CLOSE(invCum(0.1), -invCum(0.9), 1.0e-12);
+ 
+     // Values sufficiently close to the endpoints are recovered as finite
+     // sentinels; values outside that recovery tolerance are rejected.
+@@ -349,7 +349,7 @@ BOOST_AUTO_TEST_CASE(testInverseCumulativeNormal) {
+ 
+     InverseCumulativeNormal shiftedInvCum(3.0, 2.0);
+     for (Real probability : probabilities) {
+-        BOOST_CHECK_CLOSE(shiftedInvCum(probability),
++        QL_CHECK_CLOSE(shiftedInvCum(probability),
+                           3.0 + 2.0 * invCum(probability),
+                           1.0e-12);
+     }
+@@ -383,19 +383,19 @@ BOOST_AUTO_TEST_CASE(testMoroInverseCumulativeNormal) {
+     for (Real probability : moroBoundaryProbabilities) {
+         BOOST_CHECK(std::isfinite(moroInvCum(probability)));
+         // Acklam provides a more accurate independent reference here.
+-        BOOST_CHECK_CLOSE(moroInvCum(probability), invCum(probability), 1.0e-3);
++        QL_CHECK_CLOSE(moroInvCum(probability), invCum(probability), 1.0e-3);
+         // Boost.Math provides a second independent reference for the tails.
+-        BOOST_CHECK_CLOSE(moroInvCum(probability),
++        QL_CHECK_CLOSE(moroInvCum(probability),
+                           boost::math::quantile(standardNormal, probability),
+                           1.0e-3);
+     }
+ 
+     // The two approximations should not introduce a visible jump at the switch.
+-    BOOST_CHECK_SMALL(
++    QL_CHECK_SMALL(
+         std::fabs((moroInvCum(0.080001) - moroInvCum(0.08)) -
+                   (invCum(0.080001) - invCum(0.08))),
+         1.0e-4); // absolute continuity tolerance
+-    BOOST_CHECK_SMALL(
++    QL_CHECK_SMALL(
+         std::fabs((moroInvCum(0.92) - moroInvCum(0.919999)) -
+                   (invCum(0.92) - invCum(0.919999))),
+         1.0e-4); // absolute continuity tolerance
+@@ -416,10 +416,10 @@ BOOST_AUTO_TEST_CASE(testMaddockNormalDistributions) {
+                                    0.99, 1.0 - 1.0e-6, 1.0 - 1.0e-10 };
+     for (Real probability : probabilities) {
+         // Check inverse-CDF accuracy against Boost and the CDF/inverse round trip.
+-        BOOST_CHECK_CLOSE(maddockInvCum(probability),
++        QL_CHECK_CLOSE(maddockInvCum(probability),
+                           boost::math::quantile(standardNormal, probability),
+                           1.0e-10);
+-        BOOST_CHECK_CLOSE(maddockCum(maddockInvCum(probability)), probability,
++        QL_CHECK_CLOSE(maddockCum(maddockInvCum(probability)), probability,
+                           1.0e-10);
+     }
+     // Verify the location-scale transformation against an independent Boost
+@@ -429,18 +429,18 @@ BOOST_AUTO_TEST_CASE(testMaddockNormalDistributions) {
+     const boost::math::normal_distribution<Real> shiftedStandardNormal(3.0, 2.0);
+     for (Real probability : probabilities) {
+         // Check the inverse location-scale transformation against Boost.
+-        BOOST_CHECK_CLOSE(shiftedMaddockInvCum(probability),
++        QL_CHECK_CLOSE(shiftedMaddockInvCum(probability),
+                           boost::math::quantile(shiftedStandardNormal, probability),
+                           1.0e-10);
+         // Check the corresponding transformed CDF round trip.
+-        BOOST_CHECK_CLOSE(shiftedMaddockCum(3.0 + 2.0 *
++        QL_CHECK_CLOSE(shiftedMaddockCum(3.0 + 2.0 *
+                                             maddockInvCum(probability)),
+                           probability, 1.0e-10);
+     }
+     // Boost.Math throws at exact inverse-CDF endpoints.
+     BOOST_CHECK_THROW(maddockInvCum(0.0), std::exception);
+     BOOST_CHECK_THROW(maddockInvCum(1.0), std::exception);
+-    BOOST_CHECK_CLOSE(maddockCum(0.0), 0.5, 1.0e-12);
++    QL_CHECK_CLOSE(maddockCum(0.0), 0.5, 1.0e-12);
+     BOOST_CHECK(maddockCum(-1.0) < 0.5);
+     BOOST_CHECK(maddockCum(1.0) > 0.5);
+     BOOST_CHECK_THROW(MaddockInverseCumulativeNormal(0.0, -1.0), Error);
+@@ -464,14 +464,14 @@ BOOST_AUTO_TEST_CASE(testCumulativeNormal) {
+     Real previous = 0.0;
+     // Probe both sides of the direct/asymptotic CDF switch at probability 1e-8.
+     const Real cdfSwitch = boost::math::quantile(standardNormal, 1.0e-8);
+-    for (Real x : { cdfSwitch - 1.0e-6, cdfSwitch, cdfSwitch + 1.0e-6 }) {
+-        BOOST_CHECK_SMALL(cumulative(x) - boost::math::cdf(standardNormal, x),
++    for (Real x : { Real(cdfSwitch - 1.0e-6), cdfSwitch, Real(cdfSwitch + 1.0e-6) }) {
++        QL_CHECK_SMALL(cumulative(x) - boost::math::cdf(standardNormal, x),
+                           1.0e-14);
+     }
+     for (Real x : { -6.0, -10.0, -20.0 }) {
+         // The asymptotic implementation is less accurate than Boost here,
+         // but remains within this relative tolerance in the lower tail.
+-        BOOST_CHECK_CLOSE(cumulative(x), boost::math::cdf(standardNormal, x),
++        QL_CHECK_CLOSE(cumulative(x), boost::math::cdf(standardNormal, x),
+                           1.0e-5);
+     }
+     for (Real x : { -20.0, -10.0, -6.0, -1.0, 0.0, 1.0, 6.0, 10.0, 20.0 }) {
+@@ -482,7 +482,7 @@ BOOST_AUTO_TEST_CASE(testCumulativeNormal) {
+         previous = value;
+     }
+     for (Real x : { 6.0, 10.0, 20.0 }) {
+-        BOOST_CHECK_SMALL(cumulative(x) - boost::math::cdf(standardNormal, x),
++        QL_CHECK_SMALL(cumulative(x) - boost::math::cdf(standardNormal, x),
+                           1.0e-14);
+     }
+ 
+@@ -491,9 +491,9 @@ BOOST_AUTO_TEST_CASE(testCumulativeNormal) {
+     NormalDistribution standardDensity;
+     for (Real x : { 1.0, 3.0, 5.0 }) {
+         const Real standardValue = (x - 3.0) / 2.0;
+-        BOOST_CHECK_CLOSE(shiftedNormal(x), standardDensity(standardValue) / 2.0,
++        QL_CHECK_CLOSE(shiftedNormal(x), standardDensity(standardValue) / 2.0,
+                           1.0e-12);
+-        BOOST_CHECK_CLOSE(shiftedCumulative(x), cumulative(standardValue),
++        QL_CHECK_CLOSE(shiftedCumulative(x), cumulative(standardValue),
+                           1.0e-12);
+     }
+ 
+@@ -535,7 +535,7 @@ BOOST_AUTO_TEST_CASE(testBivariate) {
+ BOOST_AUTO_TEST_CASE(testBinomialDistribution) {
+     BOOST_TEST_MESSAGE("Testing binomial distributions...");
+ 
+-    BOOST_CHECK_CLOSE(binomialCoefficientLn(5, 2), std::log(10.0), 1.0e-12);
++    QL_CHECK_CLOSE(binomialCoefficientLn(5, 2), std::log(10.0), 1.0e-12);
+     BOOST_CHECK_EQUAL(binomialCoefficient(5, 2), 10.0);
+     BOOST_CHECK_EQUAL(binomialCoefficient(5, 0), 1.0);
+     BOOST_CHECK_EXCEPTION(
+@@ -543,8 +543,8 @@ BOOST_AUTO_TEST_CASE(testBinomialDistribution) {
+         ExpectedErrorMessage("n<k not allowed"));
+ 
+     BinomialDistribution pmf(0.25, 4);
+-    BOOST_CHECK_CLOSE(pmf(0), std::pow(0.75, 4), 1.0e-12);
+-    BOOST_CHECK_CLOSE(pmf(2), 6.0 * std::pow(0.25, 2) * std::pow(0.75, 2), 1.0e-12);
++    QL_CHECK_CLOSE(pmf(0), std::pow(0.75, 4), 1.0e-12);
++    QL_CHECK_CLOSE(pmf(2), 6.0 * std::pow(0.25, 2) * std::pow(0.75, 2), 1.0e-12);
+     BOOST_CHECK_EQUAL(pmf(5), 0.0);
+ 
+     BinomialDistribution zeroP(0.0, 4);
+@@ -561,7 +561,7 @@ BOOST_AUTO_TEST_CASE(testBinomialDistribution) {
+         ExpectedErrorMessage("p>1.0 not allowed"));
+ 
+     CumulativeBinomialDistribution cdf(0.25, 4);
+-    BOOST_CHECK_CLOSE(cdf(2), pmf(0) + pmf(1) + pmf(2), 1.0e-12);
++    QL_CHECK_CLOSE(cdf(2), pmf(0) + pmf(1) + pmf(2), 1.0e-12);
+     BOOST_CHECK_EQUAL(cdf(4), 1.0);
+     CumulativeBinomialDistribution zeroPCdf(0.0, 4);
+     BOOST_CHECK_EQUAL(zeroPCdf(0), 1.0);
+@@ -576,7 +576,7 @@ BOOST_AUTO_TEST_CASE(testBinomialDistribution) {
+ 
+     Real upper = PeizerPrattMethod2Inversion(1.0, 5);
+     Real lower = PeizerPrattMethod2Inversion(-1.0, 5);
+-    BOOST_CHECK_CLOSE(upper + lower, 1.0, 1.0e-12);
++    QL_CHECK_CLOSE(upper + lower, 1.0, 1.0e-12);
+     BOOST_CHECK_EQUAL(PeizerPrattMethod2Inversion(0.0, 5), 0.5);
+     BOOST_CHECK_EXCEPTION(
+         PeizerPrattMethod2Inversion(0.0, 4), Error,
+@@ -838,15 +838,15 @@ BOOST_AUTO_TEST_CASE(testInverseCumulativeStudent) {
+ 
+ BOOST_AUTO_TEST_CASE(testStudentDistribution) {
+     StudentDistribution cauchy(1);
+-    BOOST_CHECK_CLOSE(cauchy(0.0), 1.0 / M_PI, 1.0e-10);
+-    BOOST_CHECK_CLOSE(cauchy(1.0), 0.5 / M_PI, 1.0e-10);
++    QL_CHECK_CLOSE(cauchy(0.0), 1.0 / M_PI, 1.0e-10);
++    QL_CHECK_CLOSE(cauchy(1.0), 0.5 / M_PI, 1.0e-10);
+ 
+     StudentDistribution student(5);
+-    BOOST_CHECK_CLOSE(student(-1.0), student(1.0), 1.0e-12);
++    QL_CHECK_CLOSE(student(-1.0), student(1.0), 1.0e-12);
+ 
+     CumulativeStudentDistribution cumulative(5);
+-    BOOST_CHECK_CLOSE(cumulative(0.0), 0.5, 1.0e-12);
+-    BOOST_CHECK_CLOSE(cumulative(-1.0), 1.0 - cumulative(1.0), 1.0e-12);
++    QL_CHECK_CLOSE(cumulative(0.0), 0.5, 1.0e-12);
++    QL_CHECK_CLOSE(cumulative(-1.0), 1.0 - cumulative(1.0), 1.0e-12);
+ 
+     BOOST_CHECK_EXCEPTION(StudentDistribution(0), Error,
+                           ExpectedErrorMessage("invalid parameter for t-distribution"));
+@@ -1043,23 +1043,23 @@ BOOST_AUTO_TEST_CASE(testBivariateCumulativeStudentBoundaryContinuity) {
+     for (Real x : points) {
+         for (Real y : points) {
+             Real positiveExpected = univariate(std::min(x, y));
+-            BOOST_CHECK_SMALL(perfectlyPositive(x, y) - positiveExpected, tolerance);
++            QL_CHECK_SMALL(perfectlyPositive(x, y) - positiveExpected, tolerance);
+ 
+-            Real negativeExpected = x < -y ? 0.0 : univariate(x) - univariate(-y);
+-            BOOST_CHECK_SMALL(perfectlyNegative(x, y) - negativeExpected, tolerance);
++            Real negativeExpected = x < -y ? Real(0.0) : Real(univariate(x) - univariate(-y));
++            QL_CHECK_SMALL(perfectlyNegative(x, y) - negativeExpected, tolerance);
+         }
+     }
+ 
+-    BOOST_CHECK_SMALL(symmetric(0.75, -1.25) - symmetric(-1.25, 0.75), tolerance);
++    QL_CHECK_SMALL(symmetric(0.75, -1.25) - symmetric(-1.25, 0.75), tolerance);
+ 
+     Real epsilon = 1.0e-7;
+-    BOOST_CHECK_SMALL(perfectlyPositive(1.0, 1.0 + epsilon) -
++    QL_CHECK_SMALL(perfectlyPositive(1.0, 1.0 + epsilon) -
+                          perfectlyPositive(1.0, 1.0 - epsilon),
+                      1.0e-6);
+-    BOOST_CHECK_SMALL(perfectlyNegative(1.0, -1.0 + epsilon) -
++    QL_CHECK_SMALL(perfectlyNegative(1.0, -1.0 + epsilon) -
+                          perfectlyNegative(1.0, -1.0 + 2.0 * epsilon),
+                      1.0e-6);
+-    BOOST_CHECK_SMALL(perfectlyNegative(1.0, -1.0 - epsilon) -
++    QL_CHECK_SMALL(perfectlyNegative(1.0, -1.0 - epsilon) -
+                          perfectlyNegative(1.0, -1.0 - 2.0 * epsilon),
+                      1.0e-6);
+ }
+@@ -1254,7 +1254,7 @@ BOOST_AUTO_TEST_CASE(testCumulativeChiSquareDistribution) {
+     CumulativeChiSquareDistribution chiSquare(2.0);
+     BOOST_CHECK_EQUAL(chiSquare(-1.0), 0.0);
+     BOOST_CHECK_EQUAL(chiSquare(0.0), 0.0);
+-    BOOST_CHECK_CLOSE(chiSquare(2.0), 1.0 - std::exp(-1.0), 1.0e-5);
++    QL_CHECK_CLOSE(chiSquare(2.0), 1.0 - std::exp(-1.0), 1.0e-5);
+ 
+     NonCentralCumulativeChiSquareDistribution nonCentral(4.0, 1.0);
+     BOOST_CHECK_EQUAL(nonCentral(0.0), 0.0);
+diff --git a/test-suite/europeanoption.cpp b/test-suite/europeanoption.cpp
+index 21391d68a..e4f5ddfb7 100644
+--- a/test-suite/europeanoption.cpp
++++ b/test-suite/europeanoption.cpp
+@@ -1844,7 +1844,7 @@ BOOST_AUTO_TEST_CASE(testBinomialGreeksWithCoincidentNodes) {
+     VanillaOption reference(payoff, exercise);
+     reference.setPricingEngine(ext::make_shared<AnalyticEuropeanEngine>(stochProcess));
+ 
+-    BOOST_CHECK_CLOSE(option.NPV(), reference.NPV(), 1.0e-8);
++    QL_CHECK_CLOSE(option.NPV(), reference.NPV(), 1.0e-8);
+ 
+     BOOST_CHECK_EXCEPTION(option.delta(), Error,
+                           ExpectedErrorMessage("delta not provided"));
+diff --git a/test-suite/fittedbonddiscountcurve.cpp b/test-suite/fittedbonddiscountcurve.cpp
+index e7691b162..3e40b2f72 100644
+--- a/test-suite/fittedbonddiscountcurve.cpp
++++ b/test-suite/fittedbonddiscountcurve.cpp
+@@ -174,7 +174,7 @@ BOOST_AUTO_TEST_CASE(testFlatExtrapolation) {
+ 
+     Real cost1 = std::sqrt(curve1->fitResults().minimumCostValue());
+     Real cost2 = std::sqrt(curve2->fitResults().minimumCostValue());
+-    BOOST_CHECK_SMALL(cost1 - cost2, 1e-3);
++    QL_CHECK_SMALL(cost1 - cost2, 1e-3);
+ 
+     // the resulting cost values are similar for both approaches
+     // i.e. the fit has a similar quality, I get for example:
+diff --git a/test-suite/functions.cpp b/test-suite/functions.cpp
+index b8b15efed..68b0e7e49 100644
+--- a/test-suite/functions.cpp
++++ b/test-suite/functions.cpp
+@@ -124,12 +124,12 @@ BOOST_AUTO_TEST_CASE(testCumulativeGammaDistribution) {
+     CumulativeGammaDistribution exponential(1.0);
+     BOOST_CHECK_EQUAL(exponential(-1.0), 0.0);
+     BOOST_CHECK_EQUAL(exponential(0.0), 0.0);
+-    BOOST_CHECK_CLOSE(exponential(0.5), 1.0 - std::exp(-0.5), 1.0e-5);
+-    BOOST_CHECK_CLOSE(exponential(2.0), 1.0 - std::exp(-2.0), 1.0e-5);
++    QL_CHECK_CLOSE(exponential(0.5), 1.0 - std::exp(-0.5), 1.0e-5);
++    QL_CHECK_CLOSE(exponential(2.0), 1.0 - std::exp(-2.0), 1.0e-5);
+ 
+     CumulativeGammaDistribution shapeTwo(2.0);
+-    BOOST_CHECK_CLOSE(shapeTwo(1.0), 1.0 - 2.0 * std::exp(-1.0), 1.0e-5);
+-    BOOST_CHECK_CLOSE(shapeTwo(4.0), 1.0 - 5.0 * std::exp(-4.0), 1.0e-5);
++    QL_CHECK_CLOSE(shapeTwo(1.0), 1.0 - 2.0 * std::exp(-1.0), 1.0e-5);
++    QL_CHECK_CLOSE(shapeTwo(4.0), 1.0 - 5.0 * std::exp(-4.0), 1.0e-5);
+ 
+     BOOST_CHECK_EXCEPTION(
+         CumulativeGammaDistribution(0.0), Error,
+diff --git a/test-suite/overnightindexedfundingratehelper.cpp b/test-suite/overnightindexedfundingratehelper.cpp
+index a647e8844..767396457 100644
+--- a/test-suite/overnightindexedfundingratehelper.cpp
++++ b/test-suite/overnightindexedfundingratehelper.cpp
+@@ -18,6 +18,7 @@
+ */
+ 
+ #include "toplevelfixture.hpp"
++#include "utilities.hpp"
+ #include <ql/cashflows/cashflows.hpp>
+ #include <ql/cashflows/coupon.hpp>
+ #include <ql/experimental/termstructures/overnightindexedfundingratehelper.hpp>
+@@ -138,7 +139,7 @@ BOOST_AUTO_TEST_CASE(testLaggedCashFlowsAndDatedConstructor) {
+                            100.0 * discountCurve->discount(expectedFinal) - overnightNpv) /
+                           annuity;
+ 
+-    BOOST_CHECK_SMALL(helper->impliedQuote() - expectedMargin, 1.0e-13);
++    QL_CHECK_SMALL(helper->impliedQuote() - expectedMargin, 1.0e-13);
+ }
+ 
+ BOOST_AUTO_TEST_CASE(testSameDayOvernightPillar) {
+@@ -160,7 +161,7 @@ BOOST_AUTO_TEST_CASE(testSameDayOvernightPillar) {
+ 
+     BOOST_CHECK_EQUAL(helper->pillarDate(), Date(16, July, 2026));
+     curve->discount(helper->pillarDate());
+-    BOOST_CHECK_SMALL(helper->impliedQuote() - margin, 1.0e-11);
++    QL_CHECK_SMALL(helper->impliedQuote() - margin, 1.0e-11);
+ }
+ 
+ BOOST_AUTO_TEST_SUITE_END()

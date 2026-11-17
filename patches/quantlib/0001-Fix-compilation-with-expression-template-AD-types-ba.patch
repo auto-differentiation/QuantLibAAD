@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Auto Differentiation Dev Team
+ <107129969+auto-differentiation-dev@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 07:34:15 +0000
+Subject: [PATCH 1/3] Fix compilation with expression-template AD types
+ (backport of #2934, library part)
+
+---
+ ql/math/distributions/normaldistribution.hpp  |  4 +--
+ ql/math/functional.hpp                        |  3 ++-
+ .../utilities/smilesectionrndcalculator.cpp   |  2 +-
+ .../vanilla/bjerksundstenslandengine.cpp      | 26 +++++++++----------
+ ql/processes/hestonprocess.cpp                |  4 +--
+ 5 files changed, 20 insertions(+), 19 deletions(-)
+
+diff --git a/ql/math/distributions/normaldistribution.hpp b/ql/math/distributions/normaldistribution.hpp
+index ea029a536..10978de39 100644
+--- a/ql/math/distributions/normaldistribution.hpp
++++ b/ql/math/distributions/normaldistribution.hpp
+@@ -308,8 +308,8 @@ namespace QuantLib {
+ 
+     inline Real NormalDistribution::derivative(Real x) const {
+         const Real density = (*this)(x);
+-        return density == 0.0 ? 0.0 :
+-            (density * (average_ - x)) / derNormalizationFactor_;
++        return density == 0.0 ? Real(0.0) :
++            Real((density * (average_ - x)) / derNormalizationFactor_);
+     }
+ 
+     inline CumulativeNormalDistribution::CumulativeNormalDistribution(
+diff --git a/ql/math/functional.hpp b/ql/math/functional.hpp
+index b95547743..0bb60fdc5 100644
+--- a/ql/math/functional.hpp
++++ b/ql/math/functional.hpp
+@@ -33,8 +33,9 @@ namespace QuantLib {
+ 
+     // functions
+ 
++    // auto return type keeps expression-template types (e.g. AD) intact
+     template <class T>
+-    inline T squared(T x) { return x * x; }
++    inline auto squared(const T& x) { return x * x; }
+ 
+ }
+ 
+diff --git a/ql/methods/finitedifferences/utilities/smilesectionrndcalculator.cpp b/ql/methods/finitedifferences/utilities/smilesectionrndcalculator.cpp
+index 251b1a97b..da2a51335 100644
+--- a/ql/methods/finitedifferences/utilities/smilesectionrndcalculator.cpp
++++ b/ql/methods/finitedifferences/utilities/smilesectionrndcalculator.cpp
+@@ -114,7 +114,7 @@ namespace QuantLib {
+         // Finer than the tabulated map can resolve.
+         const Real xTol = 1e-12;
+ 
+-        const auto edge = [&](Real target) {
++        const auto edge = [&](Real target) -> Real {
+             Real x = 0.0;
+             Real step = firstStep;
+             const Real direction = target > zAtm ? 1.0 : -1.0;
+diff --git a/ql/pricingengines/vanilla/bjerksundstenslandengine.cpp b/ql/pricingengines/vanilla/bjerksundstenslandengine.cpp
+index b7e7d8f72..4757a45ca 100644
+--- a/ql/pricingengines/vanilla/bjerksundstenslandengine.cpp
++++ b/ql/pricingengines/vanilla/bjerksundstenslandengine.cpp
+@@ -200,8 +200,8 @@ namespace QuantLib {
+         const bool infiniteBoundary = std::fabs(beta - 1.0) < 1e-8;
+         const Real a = (bT + 2.0*std::sqrt(variance)) * B0;
+         const Real I = infiniteBoundary
+-            ? B0 + a
+-            : B0 + (BInfinity - B0) * (1 - std::exp(ht));
++            ? Real(B0 + a)
++            : Real(B0 + (BInfinity - B0) * (1 - std::exp(ht)));
+ 
+         const Real fwd = S * dD/rfD;
+         const Real q = std::log(I/fwd)/std::sqrt(variance);
+@@ -262,10 +262,10 @@ namespace QuantLib {
+                     *(B0Dq*(BInfinity - B0) - B0*(BInfinityDq - B0Dq))
+                         /squared(BInfinity - B0);
+             const Real IDq = infiniteBoundary
+-                ? B0Dq - tq*B0 + (bT + 2.0*std::sqrt(variance))*B0Dq
+-                    - squared(a)*betaDq/(2*X)
+-                : B0Dq + (BInfinityDq - B0Dq) * (1 - std::exp(ht))
+-                    - (BInfinity - B0) * std::exp(ht)*htDq;
++                ? Real(B0Dq - tq*B0 + (bT + 2.0*std::sqrt(variance))*B0Dq
++                    - squared(a)*betaDq/(2*X))
++                : Real(B0Dq + (BInfinityDq - B0Dq) * (1 - std::exp(ht))
++                    - (BInfinity - B0) * std::exp(ht)*htDq);
+ 
+             const Real phi_H_S_beta_I_I_rT_bT_v
+                 = phi_H(S, beta, I, I, rT, bT, variance);
+@@ -329,10 +329,10 @@ namespace QuantLib {
+                     *(B0Dr*(BInfinity - B0) - B0*(BInfinityDr - B0Dr))
+                         /squared(BInfinity - B0);
+             const Real IDr = infiniteBoundary
+-                ? B0Dr + tr*B0 + (bT + 2.0*std::sqrt(variance))*B0Dr
+-                    - squared(a)*betaDr/(2*X)
+-                : B0Dr + (BInfinityDr - B0Dr) * (1 - std::exp(ht))
+-                    - (BInfinity - B0) * std::exp(ht)*htDr;
++                ? Real(B0Dr + tr*B0 + (bT + 2.0*std::sqrt(variance))*B0Dr
++                    - squared(a)*betaDr/(2*X))
++                : Real(B0Dr + (BInfinityDr - B0Dr) * (1 - std::exp(ht))
++                    - (BInfinity - B0) * std::exp(ht)*htDr);
+ 
+             results.rho =
+                 (IDr*std::pow(S/I, beta)
+@@ -375,9 +375,9 @@ namespace QuantLib {
+                     + (bT + 2*std::sqrt(variance))*B0/squared(BInfinity-B0)*BInfinityDv;
+ 
+             const Real IDv = infiniteBoundary
+-                ? varianceDv/std::sqrt(variance)*B0 - squared(a)*betaDv/(2*X)
+-                : BInfinityDv*(1-std::exp(ht))
+-                    - (BInfinity-B0)*std::exp(ht)*htDv;
++                ? Real(varianceDv/std::sqrt(variance)*B0 - squared(a)*betaDv/(2*X))
++                : Real(BInfinityDv*(1-std::exp(ht))
++                    - (BInfinity-B0)*std::exp(ht)*htDv);
+ 
+             results.vega =
+                 (IDv*std::pow(S/I, beta)
+diff --git a/ql/processes/hestonprocess.cpp b/ql/processes/hestonprocess.cpp
+index 810c94849..3538c22fb 100644
+--- a/ql/processes/hestonprocess.cpp
++++ b/ql/processes/hestonprocess.cpp
+@@ -267,14 +267,14 @@ namespace QuantLib {
+               {
+                 const Real h = 0.05;
+ 
+-                Real si = ExponentialIntegral::Si(0.5*h*x);
++                Real si = ExponentialIntegral::Si(Real(0.5*h*x));
+                 Real s = M_2_PI*si;
+                 std::complex<Real> f;
+                 Size j = 0;
+                 do {
+                     ++j;
+                     const Real u = h*j;
+-                    const Real si_n = ExponentialIntegral::Si(x*(u+0.5*h));
++                    const Real si_n = ExponentialIntegral::Si(Real(x*(u+0.5*h)));
+ 
+                     f = Phi(process, u, nu_0, nu_t, dt);
+                     s+= M_2_PI*f.real()*(si_n-si);
