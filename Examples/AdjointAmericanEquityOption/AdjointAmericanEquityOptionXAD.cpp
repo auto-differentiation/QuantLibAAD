@@ -117,6 +117,33 @@ Real priceWithSensi(Rate riskFreeRate, const Calendar& calendar,
     return value;
 }
 
+#else
+
+// Sensitivities by bumping each input (central difference), in the order of the XAD version
+Real priceWithSensi(Rate riskFreeRate, const Calendar& calendar,
+                    const Date maturity, Real strike, const Date settlementDate,
+                    DayCounter dayCounter, Volatility volatility, Date todaysDate,
+                    Spread dividendYield, Option::Type type, Real underlying,
+                    const std::vector<Date>& exerciseDates, std::vector<Real>& gradient)
+{
+    // the FD price is smooth in its inputs: error about h^2, round-off about 1e-16 * v / h
+    const Real h = 1e-4;
+    auto price = [&](Rate r, Real k, Volatility vol, Real s, Spread q) {
+        return priceAmerican(r, calendar, maturity, k, settlementDate, dayCounter, vol,
+                             todaysDate, q, type, s, exerciseDates);
+    };
+    Real value = price(riskFreeRate, strike, volatility, underlying, dividendYield);
+
+    Real r = riskFreeRate, k = strike, vol = volatility, s = underlying, q = dividendYield;
+    gradient.push_back((price(r + h, k, vol, s, q) - price(r - h, k, vol, s, q)) / (2 * h));
+    gradient.push_back((price(r, k + h, vol, s, q) - price(r, k - h, vol, s, q)) / (2 * h));
+    gradient.push_back((price(r, k, vol + h, s, q) - price(r, k, vol - h, s, q)) / (2 * h));
+    gradient.push_back((price(r, k, vol, s + h, q) - price(r, k, vol, s - h, q)) / (2 * h));
+    gradient.push_back((price(r, k, vol, s, q + h) - price(r, k, vol, s, q - h)) / (2 * h));
+
+    return value;
+}
+
 #endif
 
 void printResults(Real v, const std::vector<Real> &gradient)
@@ -158,21 +185,17 @@ int main()
 
         std::cout.precision(10);
 
-#ifdef QLAAD_DISABLE_AAD
-        std::cout << "Pricing American equity option (without sensitivities)...\n";
-        Real v = priceAmerican(riskFreeRate, calendar, maturity, strike,
-                    settlementDate, dayCounter, volatility, todaysDate,
-                    dividendYield, type, underlying, exerciseDates);
-        std::cout << "American equity option value: " << v << "\n";
-#else
         std::vector<Real> gradient;
+#ifdef QLAAD_DISABLE_AAD
+        std::cout << "Pricing American equity option with bumped sensitivities...\n";
+#else
         std::cout << "Pricing American equity option with sensitivities...\n";
+#endif
         Real v = priceWithSensi(riskFreeRate, calendar, maturity, strike,
                 settlementDate, dayCounter, volatility, todaysDate,
                 dividendYield, type, underlying, exerciseDates, gradient);
         std::cout << "American equity option value: " << v << "\n";
         printResults(v, gradient);
-#endif
 
         return 0;
     }
