@@ -115,8 +115,8 @@ namespace {
         std::vector<Date> bermudanDates;
         for (const auto& cf : swap.fixedLeg())
             bermudanDates.push_back(ext::dynamic_pointer_cast<Coupon>(cf)->accrualStartDate());
-        m.bermudan = ext::make_shared<Swaption>(
-            itmSwap, ext::make_shared<BermudanExercise>(bermudanDates));
+        m.bermudan =
+            ext::make_shared<Swaption>(itmSwap, ext::make_shared<BermudanExercise>(bermudanDates));
         return m;
     }
 
@@ -152,11 +152,11 @@ namespace {
     // f(p, vols), with its gradient with respect to the parameters and the vols
     template <class F>
     double gradient(tape_type& tape,
-                  F f,
-                  const std::vector<Real>& parameters,
-                  const std::vector<Real>& swaptionVols,
-                  std::vector<double>& dp,
-                  std::vector<double>& dvol) {
+                    F f,
+                    const std::vector<Real>& parameters,
+                    const std::vector<Real>& swaptionVols,
+                    std::vector<double>& dp,
+                    std::vector<double>& dvol) {
         tape.clearAll();
         std::vector<Real> p = parameters, vols = swaptionVols;
         tape.registerInputs(p);
@@ -260,10 +260,10 @@ int main(int argc, char* argv[]) {
         Real flatRate = 0.04875825;
 
         // volatilities, by expiry (1 to 5 years), then swap length (1 to 5 years)
-        std::vector<Real> swaptionVols = {
-            0.1490, 0.1340, 0.1228, 0.1189, 0.1148, 0.1290, 0.1201, 0.1146, 0.1108,
-            0.1040, 0.1149, 0.1112, 0.1070, 0.1010, 0.0957, 0.1047, 0.1021, 0.0980,
-            0.0951, 0.1270, 0.1000, 0.0950, 0.0900, 0.1230, 0.1160};
+        std::vector<Real> swaptionVols = {0.1490, 0.1340, 0.1228, 0.1189, 0.1148, 0.1290, 0.1201,
+                                          0.1146, 0.1108, 0.1040, 0.1149, 0.1112, 0.1070, 0.1010,
+                                          0.0957, 0.1047, 0.1021, 0.0980, 0.0951, 0.1270, 0.1000,
+                                          0.0950, 0.0900, 0.1230, 0.1160};
 
 #ifdef QLAAD_DISABLE_AAD
         std::cout << "Pricing Bermudan swaption without sensitivities...\n";
