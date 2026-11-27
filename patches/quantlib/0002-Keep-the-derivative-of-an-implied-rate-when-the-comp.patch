@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Auto Differentiation Dev Team
+ <107129969+auto-differentiation-dev@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 07:34:15 +0000
+Subject: [PATCH 2/3] Keep the derivative of an implied rate when the compound
+ factor is 1 (backport of #3057)
+
+---
+ ql/interestrate.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/ql/interestrate.cpp b/ql/interestrate.cpp
+index 83898640d..6ef9efa54 100644
+--- a/ql/interestrate.cpp
++++ b/ql/interestrate.cpp
+@@ -109,8 +109,9 @@ namespace QuantLib {
+         QL_REQUIRE(compound>0.0, "positive compound factor required");
+ 
+         Rate r = Null<Rate>();
+-        if (compound==1.0) {
+-            QL_REQUIRE(t>=0.0, "non negative time (" << t << ") required");
++        // only at t == 0: for t > 0 the formulas below give 0 as well, and keep the
++        // dependence on the inputs that automatic differentiation needs
++        if (compound==1.0 && t==0.0) {
+             r = 0.0;
+         } else {
+             QL_REQUIRE(t>0.0, "positive time (" << t << ") required");
