@@ -10,12 +10,12 @@ Note that we follow QuantLib's releases in this repository, with matching versio
 ## [unreleased]
 
 
-## [1.44] - 2026-11-17
+## [1.44] - unreleased
 
 Release compatible with [QuantLib v1.44](https://github.com/lballabio/QuantLib/releases/tag/v1.44) and [XAD v2.2.0](https://github.com/auto-differentiation/xad/releases/tag/v2.2.0).
 
 -   Adds `patches/quantlib` with the fixes QuantLib v1.44 needs to build with AD, from QuantLib master (see the README)
--   Replaces the previous JIT backend option with xad-codegen (`QLAAD_ENABLE_CODEGEN`, commercial add-on)
+-   Adds xad-codegen as the code generation backend (`QLAAD_ENABLE_CODEGEN`, commercial add-on)
 -   Builds default to XAD's fastest tape options, a static QuantLib, link-time optimisation and no floating-point contraction (so AD and `double` results match), with faster builds of QuantLib and its tests; each can be switched off (see the README)
 -   Configuring stops with an error when XAD is listed before QuantLibAAD in `QL_EXTERNAL_SUBDIRECTORIES`
 -   New samples: AdjointScaling and AdjointTradeRisk
