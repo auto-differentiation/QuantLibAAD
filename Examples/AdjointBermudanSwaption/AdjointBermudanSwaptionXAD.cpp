@@ -22,10 +22,17 @@
 */
 
 /*
-This example demonstrates how to use XAD to price a Bermudan Swaption with
-sensitivities.
+This example demonstrates how to use XAD to price a Bermudan swaption with
+sensitivities to the swaption volatilities, through a Hull-White model
+calibrated to 5 of them.
 
-TODO: Use the implicit function theorem for calibration with AAD.
+The sensitivities go through the calibration with the implicit function
+theorem, without recording the optimizer: at the calibrated parameters p the
+gradient of the calibration objective in p is zero, so
+dV/dvol = dV/dvol|p - (Hpp^-1 dV/dp)' Hpvol, with the Hessian blocks Hpp and
+Hpvol from central differences of the XAD gradient in p (as in the
+AdjointHestonModel example). Recording the optimizer's iterations instead gives
+the derivative of where it stopped, not of the optimum.
 */
 
 #include <ql/qldefines.hpp>
@@ -36,177 +43,195 @@ TODO: Use the implicit function theorem for calibration with AAD.
 #include <ql/indexes/ibor/euribor.hpp>
 #include <ql/instruments/swaption.hpp>
 #include <ql/instruments/vanillaswap.hpp>
+#include <ql/math/matrix.hpp>
 #include <ql/math/optimization/levenbergmarquardt.hpp>
 #include <ql/models/shortrate/calibrationhelpers/swaptionhelper.hpp>
-#include <ql/models/shortrate/onefactormodels/blackkarasinski.hpp>
+#include <ql/models/shortrate/onefactormodels/hullwhite.hpp>
 #include <ql/pricingengines/swap/discountingswapengine.hpp>
-#include <ql/pricingengines/swaption/fdg2swaptionengine.hpp>
 #include <ql/pricingengines/swaption/fdhullwhiteswaptionengine.hpp>
-#include <ql/pricingengines/swaption/g2swaptionengine.hpp>
 #include <ql/pricingengines/swaption/jamshidianswaptionengine.hpp>
-#include <ql/pricingengines/swaption/treeswaptionengine.hpp>
 #include <ql/quotes/simplequote.hpp>
 #include <ql/termstructures/yield/flatforward.hpp>
 #include <ql/time/calendars/target.hpp>
 #include <ql/time/daycounters/thirty360.hpp>
-#include <ql/utilities/dataformatters.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
-#include <chrono>
 
 using namespace QuantLib;
 
-// Number of swaptions to be calibrated to...
-void calibrateModel(const ext::shared_ptr<ShortRateModel>& model,
-                    const std::vector<ext::shared_ptr<BlackCalibrationHelper>>& swaptions,
-                    const std::vector<Integer>& swapLengths,
-                    const std::vector<Volatility>& swaptionVols,
-                    Size numRows,
-                    Size numCols) {
+namespace {
 
-    std::vector<ext::shared_ptr<CalibrationHelper>> helpers(swaptions.begin(), swaptions.end());
-    LevenbergMarquardt om;
-    model->calibrate(helpers, om, EndCriteria(400, 100, 1.0e-8, 1.0e-8, 1.0e-8));
-}
+    // the curve, the calibration swaptions and the Bermudan swaption
+    struct Market {
+        Handle<YieldTermStructure> curve;
+        std::vector<ext::shared_ptr<CalibrationHelper>> swaptions;
+        ext::shared_ptr<Swaption> bermudan;
+    };
 
-Handle<YieldTermStructure> setupYields(Date settlementDate, Real flatRate) {
-    // flat yield term structure impling 1x5 swap at 5%
-    auto rate = ext::make_shared<SimpleQuote>(flatRate);
-    return Handle<YieldTermStructure>(
-        ext::make_shared<FlatForward>(settlementDate, Handle<Quote>(rate), Actual365Fixed()));
-}
+    // builds the market from the 5x5 swaption vols (by expiry, then swap length);
+    // the model is calibrated to the diagonal 1x5, 2x4, 3x3, 4x2, 5x1
+    Market build(const std::vector<Real>& swaptionVols, Real flatRate) {
+        Market m;
+        Calendar calendar = TARGET();
+        Date settlementDate(19, February, 2002);
+        m.curve = Handle<YieldTermStructure>(
+            ext::make_shared<FlatForward>(settlementDate, flatRate, Actual365Fixed()));
+        auto indexSixMonths = ext::make_shared<Euribor6M>(m.curve);
 
-Real priceSwaption(const std::vector<Integer>& swapLengths,
-                   const std::vector<Volatility>& swaptionVols,
-                   Size numRows,
-                   Size numCols,
-                   Real flatRate) {
+        const Size numRows = 5, numCols = 5;
+        const Integer swapLengths[] = {1, 2, 3, 4, 5};
+        for (Size i = 0; i < numRows; i++) {
+            Size j = numCols - i - 1;
+            auto vol = ext::make_shared<SimpleQuote>(swaptionVols[i * numCols + j]);
+            m.swaptions.push_back(ext::make_shared<SwaptionHelper>(
+                Period(i + 1, Years), Period(swapLengths[j], Years), Handle<Quote>(vol),
+                indexSixMonths, indexSixMonths->tenor(), indexSixMonths->dayCounter(),
+                indexSixMonths->dayCounter(), m.curve));
+        }
 
-    Date todaysDate(15, February, 2002);
-    Calendar calendar = TARGET();
-    Date settlementDate(19, February, 2002);
-    Settings::instance().evaluationDate() = todaysDate;
+        // the ITM payer swap starting in 1 year for 5 years, exercisable on each fixed coupon
+        BusinessDayConvention fixedLegConvention = Unadjusted;
+        BusinessDayConvention floatingLegConvention = ModifiedFollowing;
+        DayCounter fixedLegDayCounter = Thirty360(Thirty360::European);
+        Date startDate = calendar.advance(settlementDate, 1, Years, floatingLegConvention);
+        Date maturity = calendar.advance(startDate, 5, Years, floatingLegConvention);
+        Schedule fixedSchedule(startDate, maturity, Period(Annual), calendar, fixedLegConvention,
+                               fixedLegConvention, DateGeneration::Forward, false);
+        Schedule floatSchedule(startDate, maturity, Period(Semiannual), calendar,
+                               floatingLegConvention, floatingLegConvention,
+                               DateGeneration::Forward, false);
 
-    auto rhTermStructure = setupYields(settlementDate, flatRate);
+        VanillaSwap swap(Swap::Payer, 1000.0, fixedSchedule, 0.03, fixedLegDayCounter,
+                         floatSchedule, indexSixMonths, 0.0, indexSixMonths->dayCounter());
+        swap.setPricingEngine(ext::make_shared<DiscountingSwapEngine>(m.curve));
+        Rate fixedITMRate = swap.fairRate() * 0.8;
+        auto itmSwap = ext::make_shared<VanillaSwap>(
+            Swap::Payer, 1000.0, fixedSchedule, fixedITMRate, fixedLegDayCounter, floatSchedule,
+            indexSixMonths, 0.0, indexSixMonths->dayCounter());
 
-    // Define the ITM swap
-    Frequency fixedLegFrequency = Annual;
-    BusinessDayConvention fixedLegConvention = Unadjusted;
-    BusinessDayConvention floatingLegConvention = ModifiedFollowing;
-    DayCounter fixedLegDayCounter = Thirty360(Thirty360::European);
-    Frequency floatingLegFrequency = Semiannual;
-    Swap::Type type = Swap::Payer;
-    Rate dummyFixedRate = 0.03;
-    auto indexSixMonths = ext::make_shared<Euribor6M>(rhTermStructure);
-
-    Date startDate = calendar.advance(settlementDate, 1, Years, floatingLegConvention);
-    Date maturity = calendar.advance(startDate, 5, Years, floatingLegConvention);
-    Schedule fixedSchedule(startDate, maturity, Period(fixedLegFrequency), calendar,
-                           fixedLegConvention, fixedLegConvention, DateGeneration::Forward, false);
-    Schedule floatSchedule(startDate, maturity, Period(floatingLegFrequency), calendar,
-                           floatingLegConvention, floatingLegConvention, DateGeneration::Forward,
-                           false);
-
-    auto swap = ext::make_shared<VanillaSwap>(type, 1000.0, fixedSchedule, dummyFixedRate,
-                                              fixedLegDayCounter, floatSchedule, indexSixMonths,
-                                              0.0, indexSixMonths->dayCounter());
-    swap->setPricingEngine(ext::make_shared<DiscountingSwapEngine>(rhTermStructure));
-    Rate fixedITMRate = swap->fairRate() * 0.8;
-
-    auto itmSwap = ext::make_shared<VanillaSwap>(type, 1000.0, fixedSchedule, fixedITMRate,
-                                                 fixedLegDayCounter, floatSchedule, indexSixMonths,
-                                                 0.0, indexSixMonths->dayCounter());
-
-    // defining the swaptions to be used in model calibration
-    std::vector<Period> swaptionMaturities = {1 * Years, 2 * Years, 3 * Years, 4 * Years,
-                                              5 * Years};
-
-    std::vector<ext::shared_ptr<BlackCalibrationHelper>> swaptions;
-
-    // List of times that have to be included in the timegrid
-    std::list<Time> times;
-
-    Size i;
-    for (i = 0; i < numRows; i++) {
-        Size j = numCols - i - 1; // 1x5, 2x4, 3x3, 4x2, 5x1
-        Size k = i * numCols + j;
-        ext::shared_ptr<Quote> vol(new SimpleQuote(swaptionVols[k]));
-        swaptions.push_back(ext::make_shared<SwaptionHelper>(
-            swaptionMaturities[i], Period(swapLengths[j], Years), Handle<Quote>(vol),
-            indexSixMonths, indexSixMonths->tenor(), indexSixMonths->dayCounter(),
-            indexSixMonths->dayCounter(), rhTermStructure));
-        swaptions.back()->addTimesTo(times);
+        std::vector<Date> bermudanDates;
+        for (const auto& cf : swap.fixedLeg())
+            bermudanDates.push_back(ext::dynamic_pointer_cast<Coupon>(cf)->accrualStartDate());
+        m.bermudan =
+            ext::make_shared<Swaption>(itmSwap, ext::make_shared<BermudanExercise>(bermudanDates));
+        return m;
     }
 
-    // Building time-grid
-    TimeGrid grid(times.begin(), times.end(), 30);
-
-    // defining the models
-    auto modelHW = ext::make_shared<HullWhite>(rhTermStructure);
-
-
-    // model calibrations
-    for (i = 0; i < swaptions.size(); i++)
-        swaptions[i]->setPricingEngine(ext::make_shared<JamshidianSwaptionEngine>(modelHW));
-
-    calibrateModel(modelHW, swaptions, swapLengths, swaptionVols, numRows, numCols);
-
-
-    std::vector<Date> bermudanDates;
-    const auto& leg = swap->fixedLeg();
-    for (i = 0; i < leg.size(); i++) {
-        auto coupon = ext::dynamic_pointer_cast<Coupon>(leg[i]);
-        bermudanDates.push_back(coupon->accrualStartDate());
+    // Hull-White with parameters p = (a, sigma), pricing the calibration swaptions
+    ext::shared_ptr<HullWhite> makeModel(const Market& m, const std::vector<Real>& p) {
+        auto model = ext::make_shared<HullWhite>(m.curve, p[0], p[1]);
+        for (const auto& helper : m.swaptions)
+            ext::dynamic_pointer_cast<BlackCalibrationHelper>(helper)->setPricingEngine(
+                ext::make_shared<JamshidianSwaptionEngine>(model));
+        return model;
     }
 
-    auto bermudanExercise = ext::make_shared<BermudanExercise>(bermudanDates);
-    Swaption itmBermudanSwaption(itmSwap, bermudanExercise);
+    std::vector<Real> calibrate(const std::vector<Real>& swaptionVols, Real flatRate) {
+        Market m = build(swaptionVols, flatRate);
+        auto model = makeModel(m, {0.1, 0.01});
+        LevenbergMarquardt om;
+        model->calibrate(m.swaptions, om, EndCriteria(400, 100, 1.0e-8, 1.0e-8, 1.0e-8));
+        Array p = model->params();
+        return std::vector<Real>(p.begin(), p.end());
+    }
 
-    // Do the pricing
-    // itmBermudanSwaption.setPricingEngine(ext::make_shared<TreeSwaptionEngine>(modelHW, 50));
-    itmBermudanSwaption.setPricingEngine(ext::make_shared<FdHullWhiteSwaptionEngine>(modelHW));
-    return itmBermudanSwaption.NPV();
-}
+    Real price(const std::vector<Real>& swaptionVols, Real flatRate, const std::vector<Real>& p) {
+        Market m = build(swaptionVols, flatRate);
+        auto model = makeModel(m, p);
+        m.bermudan->setPricingEngine(ext::make_shared<FdHullWhiteSwaptionEngine>(model));
+        return m.bermudan->NPV();
+    }
 
-
-// Sensitivities with XAD
 #ifndef QLAAD_DISABLE_AAD
 
-// create tape
-using tape_type = Real::tape_type;
-tape_type tape;
+    using tape_type = Real::tape_type;
 
-Real priceWithSensi(const std::vector<Integer>& swapLengths,
-                    const std::vector<Volatility>& swaptionVols,
-                    Size numRows,
-                    Size numCols,
-                    Real flatRate,
-                    std::vector<Real>& gradient) {
-    tape.clearAll();
-    // register the independent inputs
-    auto swaptionVols_t = swaptionVols;
-    tape.registerInputs(swaptionVols_t);
-    tape.newRecording();
+    // f(p, vols), with its gradient with respect to the parameters and the vols
+    template <class F>
+    double gradient(tape_type& tape,
+                    F f,
+                    const std::vector<Real>& parameters,
+                    const std::vector<Real>& swaptionVols,
+                    std::vector<double>& dp,
+                    std::vector<double>& dvol) {
+        tape.clearAll();
+        std::vector<Real> p = parameters, vols = swaptionVols;
+        tape.registerInputs(p);
+        tape.registerInputs(vols);
+        tape.newRecording();
 
-    Real v = priceSwaption(swapLengths, swaptionVols_t, numRows, numCols, flatRate);
+        Real y = f(p, vols);
 
-    // register dependent output, set adjoint, and roll back to input adjoints
-    tape.registerOutput(v);
-    derivative(v) = 1.0;
-    tape.computeAdjoints();
+        tape.registerOutput(y);
+        derivative(y) = 1.0;
+        tape.computeAdjoints();
 
-    // store adjoints in gradient vector
-    gradient.clear();
-    gradient.reserve(swaptionVols_t.size());
-    for (auto& vol : swaptionVols_t) {
-        gradient.push_back(derivative(vol));
+        dp.clear();
+        for (const auto& pi : p)
+            dp.push_back(derivative(pi));
+        dvol.clear();
+        for (const auto& vi : vols)
+            dvol.push_back(derivative(vi));
+        return value(y);
     }
 
-    return v;
-}
+    // the price, with its sensitivities to the vols through the calibrated parameters p
+    Real implicitFunctionTheorem(tape_type& tape,
+                                 const std::vector<Real>& swaptionVols,
+                                 Real flatRate,
+                                 const std::vector<Real>& p,
+                                 std::vector<Real>& vegas) {
+        // the sum of squared calibration errors, which calibrate() minimizes
+        auto objective = [flatRate](const std::vector<Real>& q, const std::vector<Real>& vols) {
+            Market m = build(vols, flatRate);
+            makeModel(m, q);
+            Real f = 0.0;
+            for (const auto& helper : m.swaptions) {
+                Real error = helper->calibrationError();
+                f += error * error;
+            }
+            return f;
+        };
+        auto target = [flatRate](const std::vector<Real>& q, const std::vector<Real>& vols) {
+            return price(vols, flatRate, q);
+        };
+
+        // Hessian blocks of the objective, from central differences of its gradient
+        Size n = p.size(), nv = swaptionVols.size();
+        Matrix Hpp(n, n), Hvp(nv, n);
+        for (Size k = 0; k < n; ++k) {
+            double h = 1e-4 * std::max(std::fabs(value(p[k])), 0.01);
+            std::vector<Real> up = p, down = p;
+            up[k] += h;
+            down[k] -= h;
+            std::vector<double> dpUp, dvUp, dpDown, dvDown;
+            gradient(tape, objective, up, swaptionVols, dpUp, dvUp);
+            gradient(tape, objective, down, swaptionVols, dpDown, dvDown);
+            for (Size i = 0; i < n; ++i)
+                Hpp[i][k] = (dpUp[i] - dpDown[i]) / (2.0 * h);
+            for (Size j = 0; j < nv; ++j)
+                Hvp[j][k] = (dvUp[j] - dvDown[j]) / (2.0 * h);
+        }
+
+        // dV/dp and the direct dV/dvol, with the parameters held fixed
+        std::vector<double> dVdp, dVdvol;
+        Real npv = gradient(tape, target, p, swaptionVols, dVdp, dVdvol);
+
+        // the parameters must be at a minimum of the objective, where this is positive
+        QL_REQUIRE(determinant(Hpp) > 0.0,
+                   "the Hessian of the calibration objective is singular or indefinite");
+        Array lambda = inverse(Hpp) * Array(dVdp.begin(), dVdp.end());
+        Array v = Array(dVdvol.begin(), dVdvol.end()) - Hvp * lambda;
+        vegas.assign(v.begin(), v.end());
+        return npv;
+    }
 
 #endif
 
+}
 
 void printResults(Real value, const std::vector<Real>& gradient) {
     std::cout.precision(6);
@@ -229,39 +254,38 @@ int main(int argc, char* argv[]) {
 
         std::cout << std::endl;
 
+        Settings::instance().evaluationDate() = Date(15, February, 2002);
+
         // rate
         Real flatRate = 0.04875825;
 
-        // volatilities
-        Size numRows = 5;
-        Size numCols = 5;
-
-        std::vector<Integer> swapLengths = {1, 2, 3, 4, 5};
-        std::vector<Volatility> swaptionVols = {
-            0.1490, 0.1340, 0.1228, 0.1189, 0.1148, 0.1290, 0.1201, 0.1146, 0.1108,
-            0.1040, 0.1149, 0.1112, 0.1070, 0.1010, 0.0957, 0.1047, 0.1021, 0.0980,
-            0.0951, 0.1270, 0.1000, 0.0950, 0.0900, 0.1230, 0.1160};
+        // volatilities, by expiry (1 to 5 years), then swap length (1 to 5 years)
+        std::vector<Real> swaptionVols = {0.1490, 0.1340, 0.1228, 0.1189, 0.1148, 0.1290, 0.1201,
+                                          0.1146, 0.1108, 0.1040, 0.1149, 0.1112, 0.1070, 0.1010,
+                                          0.0957, 0.1047, 0.1021, 0.0980, 0.0951, 0.1270, 0.1000,
+                                          0.0950, 0.0900, 0.1230, 0.1160};
 
 #ifdef QLAAD_DISABLE_AAD
         std::cout << "Pricing Bermudan swaption without sensitivities...\n";
-        Real price = priceSwaption(swapLengths, swaptionVols, numRows, numCols, flatRate);
-        std::cout << "Price = " << price << std::endl;
+        Real npv = price(swaptionVols, flatRate, calibrate(swaptionVols, flatRate));
+        std::cout << "Price = " << npv << std::endl;
 #else
         std::cout << "Pricing Bermudan swaption with sensitivities...\n";
-        std::vector<Real> gradient;
-        
-        Real price = 0.0;
+        tape_type tape;
+        std::vector<Real> vegas;
+
+        Real npv = 0.0;
         auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < N; ++i) {
-            price =
-                priceWithSensi(swapLengths, swaptionVols, numRows, numCols, flatRate, gradient);
+            std::vector<Real> p = calibrate(swaptionVols, flatRate);
+            npv = implicitFunctionTheorem(tape, swaptionVols, flatRate, p, vegas);
         }
         auto end = std::chrono::high_resolution_clock::now();
         auto time =
             static_cast<double>(
                 std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()) *
             1e-3 / N;
-        printResults(price, gradient);
+        printResults(npv, vegas);
 
         std::cout << std::fixed << std::setprecision(9);
         std::cout << "For " << N << " repetitions, it took on average " << time << " ms\n";
