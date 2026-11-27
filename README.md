@@ -115,8 +115,8 @@ Help wanted: more QuantLib tests ported to AAD, and more examples.
 
 ## Related Projects
 
-- XAD Comprehensive automatic differentiation in [Python](https://github.com/auto-differentiation/xad-py) and [C++](https://github.com/auto-differentiation/xad)
-- QuantLibAAD: Fast risk evaluations in [Python](https://github.com/auto-differentiation/QuantLib-Risks-Py) and [C++](https://github.com/auto-differentiation/QuantLibAAD)
+- XAD: Comprehensive automatic differentiation in [Python](https://github.com/auto-differentiation/xad-py) and [C++](https://github.com/auto-differentiation/xad)
+- QuantLibAAD: Fast risk evaluations in [Python](https://github.com/auto-differentiation/QuantLibAAD-Py) and [C++](https://github.com/auto-differentiation/QuantLibAAD)
 
 ## License
 
